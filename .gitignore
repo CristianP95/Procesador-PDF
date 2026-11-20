@@ -1,0 +1,21 @@
+# Entornos y compilación
+.venv/
+.venv-build/
+build/
+dist/
+*.egg-info/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
+# Datos de Tesseract (se descargan con construir_exe.bat)
+tessdata/
+
+# Certificados y llaves privadas: nunca se suben al repositorio
+*.p12
+*.pfx
+*.key
+
+# Sistema
+Thumbs.db
+desktop.ini
