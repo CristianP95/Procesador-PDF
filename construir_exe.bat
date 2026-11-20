@@ -7,6 +7,7 @@ title Construir PDF Taller
 set "PY="
 where py >nul 2>&1 && set "PY=py -3"
 if not defined PY ( python -c "import sys" >nul 2>&1 && set "PY=python" )
+for %%P in (python3 python3.13 python3.12 python3.11 python3.10) do if not defined PY ( %%P -c "import sys" >nul 2>&1 && set "PY=%%P" )
 if not defined PY ( echo [ERROR] No se encontro Python. & goto :fallo )
 
 if not exist ".venv-build\Scripts\python.exe" (

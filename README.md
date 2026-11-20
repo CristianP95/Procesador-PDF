@@ -3,31 +3,23 @@
 Herramienta de código abierto (AGPL-3.0) en Python para manipular documentos PDF.
 Motor: [PyMuPDF](https://pymupdf.readthedocs.io). Interfaz: PySide6. Plataforma principal: Windows.
 
-## Estado (v0.1, prototipo)
+## Estado (v0.2, prototipo)
 
 | Grupo | Función | Núcleo | GUI |
 |---|---|---|---|
 | Ordenar | Unir | Sí | Sí |
-| Ordenar | Dividir (cada N páginas o por rangos) | Sí | Sí |
-| Ordenar | Reordenar (arrastrar miniaturas), rotar, eliminar, extraer | Sí | Sí |
+| Ordenar | Dividir (por rangos `1-13; 14-31` o en partes iguales) | Sí | Sí |
+| Ordenar | Reordenar (arrastrar, clic derecho, Alt+←/→), rotar, eliminar, extraer | Sí | Sí |
 | Seguridad | Proteger (AES-256, permisos) | Sí | Sí |
-| Seguridad | Desbloquear (con contraseña conocida) | Sí | Sí |
+| Seguridad | Desbloquear (contraseña de propietario) | Sí | Sí |
 | Seguridad | Comparar (texto y, opcional, imagen) | Sí | Sí |
-| Seguridad | Censurar (borra el texto de verdad; texto o regex) | Sí | Sí |
+| Seguridad | Censurar por texto/regex y por zona dibujada (borra el contenido de verdad) | Sí | Sí |
+| Seguridad | Certificar y verificar integridad (huella SHA-256) | Sí | Sí |
+| Editar | Insertar firma desde imagen | Sí | Sí |
+| Convertir | Imágenes a PDF | Sí | Sí |
 | Optimizar | Comprimir, reparar, OCR | — | — |
 | Convertir | PDF ↔ DOC | — | — |
 | Editar | Marca de agua, formularios | — | — |
-
-## Ejecutar en Windows
-
-Requiere Python 3.10 o superior. Doble clic en `ejecutar.bat`
-(la primera vez crea `.venv` e instala todo). O a mano:
-
-```bat
-py -m venv .venv
-.venv\Scripts\pip install -e .[gui,dev]
-.venv\Scripts\python -m pdftaller  archivo.pdf
-```
 
 ## Crear el ejecutable (sin Python)
 
@@ -38,8 +30,11 @@ a cualquier PC con Windows y funciona sin Python.
 ## Uso de la GUI
 
 - Cada documento se abre en su propia pestaña (Ctrl+O o arrastrar archivos a la ventana).
-- Arrastre las miniaturas para reordenar; seleccione páginas y use Ctrl+L / Ctrl+R para rotar o Supr para eliminar.
-  Los cambios quedan pendientes (● en la pestaña) hasta Guardar (Ctrl+S) o Guardar como.
+- A la izquierda, miniaturas: arrástrelas para reordenar o use clic derecho (rotar, mover, extraer, eliminar).
+  A la derecha, vista previa de la página con zoom (Ctrl+rueda).
+- **Censurar zona**: active el botón y dibuje recuadros sobre la vista previa. **Firmar**: elija la imagen y dibuje
+  el recuadro donde va. Todo queda pendiente (● en la pestaña) hasta Guardar (Ctrl+S) o Guardar como.
+- **Certificar** guarda `documento.pdf.sha256.json` con la huella; **Verificar integridad** detecta si el PDF cambió.
 - Las operaciones de Ordenar y Seguridad crean un archivo nuevo y lo abren en otra pestaña.
 - Los documentos protegidos piden la contraseña al abrirse; editarlos conserva la protección.
 
@@ -69,6 +64,9 @@ src/pdftaller/
   core/        lógica pura (V1 y V2 la comparten)
     organize.py   unir, dividir, reordenar, rotar, eliminar, extraer
     security.py   proteger, desbloquear, comparar, censurar
+    integrity.py  certificar / verificar con SHA-256
+    edit.py       insertar firmas (imágenes)
+    convert.py    imágenes a PDF
     pages.py      rangos de páginas "1-3, 5"
   gui/         PySide6: ventana con pestañas, diálogos
 tests/         pytest del núcleo

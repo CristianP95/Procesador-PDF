@@ -7,12 +7,12 @@ import pymupdf
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QAction, QKeySequence
 from PySide6.QtWidgets import (
-    QFileDialog, QInputDialog, QLabel, QMainWindow, QMessageBox, QStackedWidget, QTabWidget, QToolBar,
+    QFileDialog, QInputDialog, QLabel, QMainWindow, QMenu, QMessageBox, QStackedWidget, QTabWidget, QToolBar,
 )
 
 from pdftaller import core
 
-from .dialogs import PDF_FILTER, CompareDialog, MergeDialog, ProtectDialog, RedactDialog, SplitDialog, ask_password
+from .dialogs import IMG_FILTER, PDF_FILTER, CertifyDialog, CompareDialog, VerifyDialog, MergeDialog, ProtectDialog, RedactDialog, SplitDialog, ask_password
 from .document_tab import DocumentTab
 
 
@@ -62,6 +62,7 @@ class MainWindow(QMainWindow):
         self._act(m, "Abrir…", self.open_dialog, QKeySequence.Open, needs_doc=False, toolbar=tb)
         self._act(m, "Guardar", self.save, QKeySequence.Save, toolbar=tb)
         self._act(m, "Guardar como…", self.save_as, QKeySequence.SaveAs)
+        self._act(m, "Crear PDF desde imágenes…", self.images_to_pdf, needs_doc=False)
         self._act(m, "Cerrar pestaña", lambda: self.close_tab(self.tabs.currentIndex()), QKeySequence.Close)
         m.addSeparator()
         self._act(m, "Salir", self.close, QKeySequence.Quit, needs_doc=False)
@@ -75,13 +76,28 @@ class MainWindow(QMainWindow):
         self._act(m, "Rotar a la izquierda", lambda: self._rotate(-90), "Ctrl+L")
         self._act(m, "Rotar a la derecha", lambda: self._rotate(90), "Ctrl+R")
         self._act(m, "Eliminar páginas seleccionadas", self.delete_pages, QKeySequence.Delete)
+        m.addSeparator()
+        self._act(m, "Mover a la izquierda", lambda: self.current().move_selected("izquierda"), "Alt+Left")
+        self._act(m, "Mover a la derecha", lambda: self.current().move_selected("derecha"), "Alt+Right")
+        self._act(m, "Mover al inicio", lambda: self.current().move_selected("inicio"), "Alt+Home")
+        self._act(m, "Mover al final", lambda: self.current().move_selected("final"), "Alt+End")
+        self._act(m, "Mover a la posición…", self.move_to_position)
+        tb.addSeparator()
+
+        m = bar.addMenu("&Editar")
+        self._act(m, "Insertar firma (imagen)…", self.start_signature, toolbar=tb)
+        self._act(m, "Cambiar imagen de firma…", lambda: self.current().request_signature_image())
         tb.addSeparator()
 
         m = bar.addMenu("&Seguridad")
         self._act(m, "Proteger…", self.protect, toolbar=tb)
         self._act(m, "Desbloquear…", self.unlock, toolbar=tb)
         self._act(m, "Comparar…", self.compare, toolbar=tb)
-        self._act(m, "Censurar…", self.redact, toolbar=tb)
+        self._act(m, "Censurar por texto…", self.redact, toolbar=tb)
+        self._act(m, "Censurar zona (dibujar recuadro)", self.start_area_redaction, toolbar=tb)
+        m.addSeparator()
+        self._act(m, "Certificar con huella (hash)…", self.certify, toolbar=tb)
+        self._act(m, "Verificar integridad…", self.verify, needs_doc=False, toolbar=tb)
 
     def _update_actions(self, *_):
         has = self.current() is not None
@@ -121,6 +137,8 @@ class MainWindow(QMainWindow):
         idx = self.tabs.addTab(tab, tab.title())
         self.tabs.setTabToolTip(idx, str(path))
         tab.modified_changed.connect(lambda _=None, t=tab: self._retitle(t))
+        tab.status.connect(lambda msg: self.statusBar().showMessage(msg, 5000))
+        tab.pages.customContextMenuRequested.connect(lambda pos, t=tab: self._page_menu(t, pos))
         self.tabs.setCurrentIndex(idx)
         self._update_actions()
         return tab
@@ -186,6 +204,20 @@ class MainWindow(QMainWindow):
         tab = self.current()
         if tab is None:
             return False
+        if tab.has_redactions:
+            r = QMessageBox.question(
+                self, "Guardar",
+                "La censura es permanente: el texto bajo las zonas se elimina del archivo.\n\n"
+                "¿Guardar en un archivo NUEVO (recomendado)?",
+                QMessageBox.Yes | QMessageBox.No | QMessageBox.Cancel, QMessageBox.Yes)
+            if r == QMessageBox.Cancel:
+                return False
+            if r == QMessageBox.Yes:
+                out = self._ask_output("Guardar PDF censurado", tab.path.with_name(f"{tab.path.stem}_censurado.pdf"))
+                if not out or self._run("Guardar", tab.save, out) is None:
+                    return False
+                self._retitle(tab)
+                return True
         if self._run("Guardar", tab.save) is None:
             return False
         self._retitle(tab)
@@ -305,3 +337,79 @@ class MainWindow(QMainWindow):
             path, count = res
             self.statusBar().showMessage(f"{count} zona(s) censurada(s)", 6000)
             self.open_file(path, tab.password)
+
+    # ------------------------------------------------------------ menú contextual
+    def _page_menu(self, tab: DocumentTab, pos):
+        it = tab.pages.itemAt(pos)
+        if it is not None and not it.isSelected():
+            tab.pages.clearSelection()
+            it.setSelected(True)
+            tab.pages.setCurrentItem(it)
+        if not tab.pages.selectedItems():
+            return
+        n = len(tab.pages.selectedItems())
+        m = QMenu(self)
+        m.addSection(f"{n} página(s) seleccionada(s)")
+        m.addAction("Rotar a la izquierda", lambda: tab.rotate_selected(-90))
+        m.addAction("Rotar a la derecha", lambda: tab.rotate_selected(90))
+        m.addAction("Girar 180°", lambda: tab.rotate_selected(180))
+        m.addSeparator()
+        m.addAction("Mover a la izquierda", lambda: tab.move_selected("izquierda"))
+        m.addAction("Mover a la derecha", lambda: tab.move_selected("derecha"))
+        m.addAction("Mover al inicio", lambda: tab.move_selected("inicio"))
+        m.addAction("Mover al final", lambda: tab.move_selected("final"))
+        m.addAction("Mover a la posición…", self.move_to_position)
+        m.addSeparator()
+        m.addAction("Extraer a un PDF nuevo…", self.extract)
+        m.addAction("Censurar zona en esta página", self.start_area_redaction)
+        m.addAction("Insertar firma en esta página", self.start_signature)
+        m.addSeparator()
+        m.addAction("Eliminar", self.delete_pages)
+        m.exec(tab.pages.viewport().mapToGlobal(pos))
+
+    def move_to_position(self):
+        tab = self.current()
+        rows = tab.pages.selected_rows()
+        if not rows:
+            self.statusBar().showMessage("Seleccione una o más páginas", 3000)
+            return
+        n, ok = QInputDialog.getInt(self, "Mover páginas", f"Nueva posición (1 a {tab.pages.count()}):",
+                                    rows[0] + 1, 1, tab.pages.count())
+        if ok:
+            tab.pages.move_rows(rows, n - 1, final=True)
+
+    def start_area_redaction(self):
+        tab = self.current()
+        tab.btn_redact.setChecked(True)
+        self.statusBar().showMessage("Dibuje recuadros sobre la vista previa. Guarde para aplicar la censura.", 8000)
+
+    def start_signature(self):
+        tab = self.current()
+        tab.btn_sign.setChecked(True)
+        if tab.btn_sign.isChecked():
+            self.statusBar().showMessage("Dibuje el recuadro donde irá la firma. Guarde para aplicarla.", 8000)
+
+    # ------------------------------------------------------------ convertir / integridad
+    def images_to_pdf(self):
+        imgs, _ = QFileDialog.getOpenFileNames(self, "Elegir imágenes (en orden)", "", IMG_FILTER)
+        if not imgs:
+            return
+        size, ok = QInputDialog.getItem(self, "Tamaño de página", "Tamaño de cada hoja:",
+                                        ["Igual a la imagen", "A4", "Carta (letter)"], 0, False)
+        if not ok:
+            return
+        page_size = {"A4": "A4", "Carta (letter)": "letter"}.get(size)
+        out = self._ask_output("Guardar PDF", Path(imgs[0]).with_name("imagenes.pdf"))
+        if out and self._run("Imágenes a PDF", core.images_to_pdf, imgs, out, page_size=page_size, margin=18 if page_size else 0):
+            self.open_file(out)
+
+    def certify(self):
+        tab = self.current()
+        if tab.modified:
+            QMessageBox.information(self, "Certificar", "Guarde primero los cambios: se certifica el archivo guardado.")
+            return
+        CertifyDialog(tab.path, self).exec()
+
+    def verify(self):
+        tab = self.current()
+        VerifyDialog(tab.path if tab else None, self).exec()
