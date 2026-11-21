@@ -21,31 +21,62 @@ def is_encrypted(path: PathLike) -> bool:
         return bool(doc.needs_pass)
 
 
+ALL_PERMISSIONS = {"imprimir", "copiar", "modificar", "comentar"}
+
+
+def generate_password(length: int = 16) -> str:
+    """Contraseña aleatoria fuerte (sin caracteres confusos como 0/O o l/1)."""
+    import secrets
+    alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnpqrstuvwxyz23456789-_.!"
+    return "".join(secrets.choice(alphabet) for _ in range(length))
+
+
 def protect(
     input: PathLike,
     output: PathLike,
     user_password: str | None,
     owner_password: str | None = None,
     *,
-    allow_print: bool = True,
-    allow_copy: bool = False,
-    allow_modify: bool = False,
-    allow_annotate: bool = False,
+    allow_print: bool | None = None,
+    allow_copy: bool | None = None,
+    allow_modify: bool | None = None,
+    allow_annotate: bool | None = None,
     password: str | None = None,
 ) -> Path:
     """Cifra el PDF con AES-256.
 
-    - ``user_password``: contraseña para ABRIR. Puede ser vacía: se abre sin contraseña pero
-      con las restricciones activas.
+    - ``user_password``: contraseña para ABRIR. Puede ser vacía: el PDF se abre sin contraseña
+      pero con las restricciones activas.
     - ``owner_password``: contraseña de PERMISOS (propietario). Quien abre con ella no tiene
-      restricciones, por eso debe ser distinta de la de apertura. Si se omite, se usa la de
-      apertura y los ``allow_*`` no tendrán efecto para quien la conozca.
+      restricciones, por eso **debe ser distinta** de la de apertura (puede crear una con
+      :func:`generate_password`; guárdela, sin ella no se puede desbloquear).
     - ``allow_*``: lo que puede hacer quien abre con la contraseña de apertura (o sin contraseña).
+      Por defecto: imprimir sí; copiar, modificar y comentar no.
+
+    Si solo se da ``user_password`` (sin contraseña de permisos ni ``allow_*``), el PDF queda
+    protegido para abrir pero sin restricciones: quien conoce la contraseña puede todo.
+
+    Las restricciones las aplican los lectores que respetan la norma PDF (Adobe Reader,
+    PDF Taller…); algunos visores de navegador ignoran parte de ellas.
     """
     user_password = user_password or ""
-    owner_password = owner_password or user_password
+    owner_password = owner_password or ""
+    explicit = [v for v in (allow_print, allow_copy, allow_modify, allow_annotate) if v is not None]
+    if not owner_password:
+        if any(v is False for v in explicit):
+            raise PdfTallerError("Para aplicar restricciones indique una contraseña de permisos distinta "
+                                 "de la de apertura (puede generarla con generate_password())")
+        # Solo contraseña de apertura: sin restricciones (serían inútiles con una sola contraseña)
+        allow_print = allow_copy = allow_modify = allow_annotate = True
+        owner_password = user_password
+    allow_print = True if allow_print is None else allow_print
+    allow_copy, allow_modify, allow_annotate = (bool(v) for v in (allow_copy, allow_modify, allow_annotate))
+    restricted = not (allow_print and allow_copy and allow_modify and allow_annotate)
     if not owner_password:
         raise PdfTallerError("Indique al menos una contraseña (de apertura o de permisos)")
+    if restricted and owner_password == user_password:
+        raise PdfTallerError("La contraseña de permisos debe ser distinta de la de apertura: "
+                             "quien abre con la de permisos no tiene restricciones")
     perm = 0
     if allow_print:
         perm |= pymupdf.PDF_PERM_PRINT | pymupdf.PDF_PERM_PRINT_HQ
@@ -56,7 +87,7 @@ def protect(
     if allow_annotate:
         perm |= pymupdf.PDF_PERM_ANNOTATE | pymupdf.PDF_PERM_FORM
     with open_pdf(input, password) as doc:
-        return save_pdf(
+        out = save_pdf(
             doc,
             output,
             encryption=pymupdf.PDF_ENCRYPT_AES_256,
@@ -64,6 +95,12 @@ def protect(
             owner_pw=owner_password,
             permissions=perm,
         )
+    # Comprobación: al reabrir con la contraseña de apertura deben verse justo esas restricciones.
+    wanted = {"imprimir": allow_print, "copiar": allow_copy, "modificar": allow_modify, "comentar": allow_annotate}
+    got = permissions(out, user_password or None)
+    if got != wanted:
+        raise PdfTallerError(f"Las restricciones no quedaron aplicadas correctamente: {got}")
+    return out
 
 
 def permissions(path: PathLike, password: str | None = None) -> dict[str, bool]:
@@ -181,26 +218,40 @@ Rect = tuple[float, float, float, float]
 def find_text(input: PathLike, terms: Iterable[str], *, regex: bool = False,
               ignore_case: bool = True, password: str | None = None) -> dict[int, list[Rect]]:
     """Devuelve las zonas (por página, base 0) donde aparecen los términos."""
+    return {p: [r for r, _ in hits] for p, hits in
+            find_text_labeled(input, terms, regex=regex, ignore_case=ignore_case, password=password).items()}
+
+
+def find_text_labeled(input: PathLike, terms: Iterable[str], *, regex: bool = False,
+                      ignore_case: bool = True, password: str | None = None) -> dict[int, list[tuple[Rect, str]]]:
+    """Como :func:`find_text`, pero cada zona va con el texto encontrado: ``{pag: [(rect, texto)]}``."""
     with open_pdf(input, password, for_edit=False) as doc:
-        return {i: [tuple(r) for r in rects] for i, rects in _find(doc, terms, regex, ignore_case).items()}
+        return {i: [(tuple(r), t) for r, t in hits] for i, hits in _find(doc, terms, regex, ignore_case).items()}
 
 
-def _find(doc: pymupdf.Document, terms: Iterable[str], regex: bool, ignore_case: bool) -> dict[int, list[pymupdf.Rect]]:
+def _find(doc: pymupdf.Document, terms: Iterable[str], regex: bool,
+          ignore_case: bool) -> dict[int, list[tuple[pymupdf.Rect, str]]]:
     terms = [t for t in terms if t]
     flags = re.IGNORECASE if ignore_case else 0
-    hits: dict[int, list[pymupdf.Rect]] = {}
+    if regex:
+        for t in terms:
+            try:
+                re.compile(t)
+            except re.error as exc:
+                raise PdfTallerError(f"Expresión regular no válida «{t}»: {exc}") from exc
+    hits: dict[int, list[tuple[pymupdf.Rect, str]]] = {}
     for page in doc:
-        rects: list[pymupdf.Rect] = []
+        found: list[tuple[pymupdf.Rect, str]] = []
         if regex:
             text = page.get_text("text")
             needles = {m.group(0) for t in terms for m in re.finditer(t, text, flags) if m.group(0).strip()}
         else:
             needles = set(terms)
-        for needle in needles:
+        for needle in sorted(needles):
             # search_for ya ignora mayúsculas/minúsculas
-            rects += page.search_for(needle)
-        if rects:
-            hits[page.number] = rects
+            found += [(r, needle) for r in page.search_for(needle)]
+        if found:
+            hits[page.number] = found
     return hits
 
 
@@ -222,7 +273,7 @@ def redact(
     Devuelve ``(ruta_salida, número_de_zonas_censuradas)``.
     """
     with open_pdf(input, password) as doc:
-        targets = _find(doc, terms, regex, ignore_case=True)
+        targets = {p: [r for r, _ in h] for p, h in _find(doc, terms, regex, ignore_case=True).items()}
         for pno, rects in (areas or {}).items():
             targets.setdefault(pno, []).extend(pymupdf.Rect(r) for r in rects)
         count = 0

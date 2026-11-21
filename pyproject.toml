@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "pdftaller"
-version = "0.3.0"
+version = "0.4.0"
 description = "Herramienta de código abierto para manipular PDFs: ordenar, optimizar, convertir, editar y proteger."
 readme = "README.md"
 requires-python = ">=3.10"

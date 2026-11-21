@@ -1,7 +1,7 @@
 """Widgets de páginas: lista de miniaturas reordenable y vista previa con dibujo de zonas."""
 from __future__ import annotations
 
-from PySide6.QtCore import QItemSelectionModel, QPoint, QRect, QRectF, QSize, Qt, Signal
+from PySide6.QtCore import QItemSelectionModel, QPoint, QRect, QRectF, QSize, Qt, QTimer, Signal
 from PySide6.QtGui import QColor, QPainter, QPen, QPixmap
 from PySide6.QtWidgets import QAbstractItemView, QApplication, QListView, QListWidget, QMenu, QWidget
 
@@ -34,26 +34,55 @@ class PageList(QListWidget):
         self._press: QPoint | None = None
         self._dragging = False
         self._drop_row: int | None = None
+        self._drop: tuple[int, int, bool] | None = None
+        self._last_pos: QPoint | None = None
+        self._scroll_timer = QTimer(self)
+        self._scroll_timer.setInterval(40)
+        self._scroll_timer.timeout.connect(self._tick_autoscroll)
         self.locked = False
 
     # -- movimiento
     def selected_rows(self) -> list[int]:
         return sorted(self.row(it) for it in self.selectedItems())
 
-    def drop_row_at(self, pos: QPoint) -> int:
-        """Fila de inserción para un punto del viewport: antes o después del ítem más cercano."""
-        best, best_d = self.count(), None
+    def _rect(self, r: int) -> QRect:
+        return self.visualRect(self.model().index(r, 0))
+
+    def _same_line(self, a: int, b: int) -> bool:
+        return 0 <= a < self.count() and 0 <= b < self.count() and \
+            abs(self._rect(a).top() - self._rect(b).top()) < self._rect(a).height() / 2
+
+    def _horizontal(self, r: int) -> bool:
+        """``True`` si el ítem ``r`` tiene vecinos en su misma fila (cuadrícula);
+        ``False`` si las páginas están en una sola columna (se decide por arriba/abajo)."""
+        if self.count() < 2:
+            return True
+        return self._same_line(r, r - 1) or self._same_line(r, r + 1)
+
+    def drop_target(self, pos: QPoint) -> tuple[int, int, bool]:
+        """``(fila_de_inserción, ítem_de_referencia, después)`` para un punto del viewport.
+
+        Se toma la página más cercana al cursor (también si está en el hueco entre filas) y se
+        inserta antes o después según el lado: izquierda/derecha en cuadrícula, arriba/abajo
+        si hay una sola columna.
+        """
+        if not self.count():
+            return 0, -1, False
+        best, best_d = 0, None
         for r in range(self.count()):
-            rect = self.visualRect(self.model().index(r, 0))
-            if rect.top() <= pos.y() <= rect.bottom() or rect.contains(pos):
-                d = abs(rect.center().x() - pos.x())
-                if best_d is None or d < best_d:
-                    best_d, best = d, (r if pos.x() < rect.center().x() else r + 1)
-        if best_d is None and self.count():
-            # Fuera de cualquier fila visual: antes de la primera fila o después de la última
-            first = self.visualRect(self.model().index(0, 0))
-            best = 0 if pos.y() < first.top() else self.count()
-        return best
+            rect = self._rect(r)
+            dx = max(rect.left() - pos.x(), 0, pos.x() - rect.right())
+            dy = max(rect.top() - pos.y(), 0, pos.y() - rect.bottom())
+            d = dx * dx + dy * dy * 4          # pesa más la distancia vertical (fila correcta)
+            if best_d is None or d < best_d:
+                best_d, best = d, r
+        rect = self._rect(best)
+        after = pos.x() > rect.center().x() if self._horizontal(best) else pos.y() > rect.center().y()
+        return (best + 1 if after else best), best, after
+
+    def drop_row_at(self, pos: QPoint) -> int:
+        """Fila de inserción para un punto del viewport."""
+        return self.drop_target(pos)[0]
 
     def move_rows(self, rows: list[int], target: int, *, final: bool = False):
         """Mueve las filas ``rows`` al punto de inserción ``target`` (0..count, posiciones actuales).
@@ -104,11 +133,32 @@ class PageList(QListWidget):
                     self._dragging = True
                     self.viewport().setCursor(Qt.ClosedHandCursor)
             if self._dragging:
-                self._autoscroll(pos)
-                self._drop_row = self.drop_row_at(pos)
-                self.viewport().update()
+                self._last_pos = pos
+                if not self._scroll_timer.isActive():
+                    self._scroll_timer.start()
+                self._update_drop(pos)
                 return
         super().mouseMoveEvent(e)
+
+    def _update_drop(self, pos: QPoint):
+        self._drop = self.drop_target(pos)
+        self._drop_row = self._drop[0]
+        self.viewport().update()
+
+    def _tick_autoscroll(self):
+        """Mientras se arrastra cerca del borde (o fuera), desplaza la lista aunque el ratón no se mueva."""
+        if not self._dragging or self._last_pos is None:
+            self._scroll_timer.stop()
+            return
+        bar, h, y = self.verticalScrollBar(), self.viewport().height(), self._last_pos.y()
+        margin = 40
+        if y < margin:
+            bar.setValue(bar.value() - max(10, margin - y))
+        elif y > h - margin:
+            bar.setValue(bar.value() + max(10, y - h + margin))
+        else:
+            return
+        self._update_drop(self._last_pos)
 
     def mouseReleaseEvent(self, e):
         if self._dragging:
@@ -127,30 +177,24 @@ class PageList(QListWidget):
         super().mouseReleaseEvent(e)
 
     def _end_drag(self):
-        self._press, self._dragging, self._drop_row = None, False, None
+        self._press, self._dragging, self._drop_row, self._drop, self._last_pos = None, False, None, None, None
+        self._scroll_timer.stop()
         self.viewport().unsetCursor()
         self.viewport().update()
 
-    def _autoscroll(self, pos: QPoint):
-        bar, h = self.verticalScrollBar(), self.viewport().height()
-        if pos.y() < 30:
-            bar.setValue(bar.value() - 20)
-        elif pos.y() > h - 30:
-            bar.setValue(bar.value() + 20)
-
     def paintEvent(self, e):
         super().paintEvent(e)
-        if self._dragging and self._drop_row is not None and self.count():
-            r = self._drop_row
-            if r < self.count():
-                rect = self.visualRect(self.model().index(r, 0))
-                x = rect.left() - 3
-            else:
-                rect = self.visualRect(self.model().index(self.count() - 1, 0))
-                x = rect.right() + 3
+        if self._dragging and self._drop is not None and self._drop[1] >= 0:
+            _, ref, after = self._drop
+            rect = self._rect(ref)
             p = QPainter(self.viewport())
             p.setPen(QPen(QColor(25, 118, 210), 4))
-            p.drawLine(x, rect.top(), x, rect.bottom())
+            if self._horizontal(ref):
+                x = rect.right() + 4 if after else rect.left() - 4
+                p.drawLine(x, rect.top(), x, rect.bottom())
+            else:
+                y = rect.bottom() + 4 if after else rect.top() - 4
+                p.drawLine(rect.left(), y, rect.right(), y)
 
 
 class PageView(QWidget):
@@ -165,7 +209,7 @@ class PageView(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self._pix = QPixmap()
-        self._marks: list[tuple[str, QRectF, QPixmap | None]] = []
+        self._marks: list[tuple[str, QRectF, QPixmap | None, bool]] = []
         self._start: QPoint | None = None
         self._current: QRect | None = None
         self.mode: str | None = None
@@ -185,16 +229,23 @@ class PageView(QWidget):
         p = QPainter(self)
         if not self._pix.isNull():
             p.drawPixmap(0, 0, self._pix)
-        for kind, r, img in self._marks:
+        for kind, r, img, selected in self._marks:
             if kind == "image" and img is not None and not img.isNull():
                 scaled = img.scaled(r.size().toSize(), Qt.KeepAspectRatio, Qt.SmoothTransformation)
                 p.drawPixmap(r.topLeft().toPoint(), scaled)
                 p.setPen(QPen(QColor(30, 110, 230), 1, Qt.DashLine))
                 p.setBrush(Qt.NoBrush)
+            elif kind == "outline":      # vista de resultado: la página ya viene censurada
+                p.setPen(QPen(QColor(220, 40, 40), 1, Qt.DashLine))
+                p.setBrush(Qt.NoBrush)
             else:
                 p.setPen(Qt.NoPen)
                 p.setBrush(self.COLORS.get(kind, QColor(0, 0, 0, 120)))
             p.drawRect(r)
+            if selected:
+                p.setPen(QPen(QColor(255, 190, 0), 3))
+                p.setBrush(Qt.NoBrush)
+                p.drawRect(r.adjusted(-3, -3, 3, 3))
         if self._current is not None:
             p.setPen(QPen(QColor(220, 40, 40), 2, Qt.DashLine))
             p.setBrush(QColor(220, 40, 40, 40))
@@ -202,7 +253,7 @@ class PageView(QWidget):
 
     def contextMenuEvent(self, e):
         idx = -1
-        for i, (_, r, _) in enumerate(self._marks):
+        for i, (_, r, _, _) in enumerate(self._marks):
             if r.contains(e.pos().toPointF()):
                 idx = i
         self.mark_menu_requested.emit(idx, e.globalPos())

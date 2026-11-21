@@ -6,7 +6,7 @@ from pathlib import Path
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QButtonGroup, QCheckBox, QDialog, QDialogButtonBox, QFileDialog, QFormLayout, QHBoxLayout,
-    QLabel, QLineEdit, QListWidget, QMessageBox, QPlainTextEdit, QPushButton, QRadioButton,
+    QLabel, QLineEdit, QListWidget, QListWidgetItem, QMessageBox, QPushButton, QRadioButton,
     QSpinBox, QTextBrowser, QVBoxLayout, QWidget,
 )
 
@@ -156,17 +156,24 @@ class SplitDialog(QDialog):
 
 
 class ProtectDialog(QDialog):
-    """Dos contraseñas: una para ABRIR (opcional) y otra de PERMISOS (propietario, obligatoria)."""
+    """Contraseña para ABRIR (opcional) + restricciones, con contraseña de PERMISOS (o una generada)."""
 
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setWindowTitle("Proteger PDF")
-        self.setMinimumWidth(520)
+        self.setMinimumWidth(560)
+        self.generated = False
         self.c_open = QCheckBox("Pedir contraseña para abrir el documento")
         self.user = QLineEdit(echoMode=QLineEdit.Password)
         self.user_confirm = QLineEdit(echoMode=QLineEdit.Password)
         self.owner = QLineEdit(echoMode=QLineEdit.Password)
+        self.owner.setPlaceholderText("Vacía = se genera una automáticamente")
         self.owner_confirm = QLineEdit(echoMode=QLineEdit.Password)
+        gen = QPushButton("Generar")
+        gen.setToolTip("Crea una contraseña de permisos aleatoria y fuerte")
+        gen.clicked.connect(self._generate)
+        self.show_pw = QCheckBox("Mostrar")
+        self.show_pw.toggled.connect(self._show)
         self.c_print = QCheckBox("Imprimir")
         self.c_print.setChecked(True)
         self.c_copy = QCheckBox("Copiar texto e imágenes")
@@ -176,24 +183,43 @@ class ProtectDialog(QDialog):
         self._toggle(False)
 
         form = QFormLayout(self)
-        form.addRow(QLabel("<b>1. Apertura</b>"))
+        form.addRow(QLabel("<b>1. Apertura</b> (opcional)"))
         form.addRow(self.c_open)
         form.addRow("Contraseña para abrir:", self.user)
         form.addRow("Repetir:", self.user_confirm)
-        form.addRow(QLabel("<b>2. Permisos</b> — quien abra el documento podrá:"))
+        form.addRow(_wlabel("<b>2. Permisos</b> — quien abra el documento (con la contraseña de apertura o "
+                            "sin contraseña) podrá:"))
         for c in (self.c_print, self.c_copy, self.c_modify, self.c_annot):
             form.addRow(c)
-        form.addRow(_wlabel("<b>3. Contraseña de permisos</b> (propietario): quita todas las restricciones. "
-                            "Debe ser distinta de la de apertura. Guárdela: sin ella no se puede desbloquear."))
-        form.addRow("Contraseña de permisos:", self.owner)
+        form.addRow(_wlabel("<b>3. Contraseña de permisos</b> (propietario): quien la use NO tiene restricciones; "
+                            "solo sirve para desbloquear. Si la deja vacía se genera una y se le muestra al "
+                            "final para que la guarde."))
+        form.addRow("Contraseña de permisos:", _row(self.owner, gen, self.show_pw))
         form.addRow("Repetir:", self.owner_confirm)
-        form.addRow(_wlabel("<small>Cifrado AES-256. Las restricciones las respetan Adobe Reader, Edge, Chrome y "
-                            "PDF Taller; algunos programas podrían ignorarlas.</small>"))
+        form.addRow(_wlabel("<small>Cifrado AES-256. Adobe Acrobat/Reader y PDF Taller aplican las restricciones. "
+                            "Los visores de los navegadores (Edge, Chrome, Firefox) pueden ignorar algunas "
+                            "(sobre todo copiar e imprimir): para material sensible combine con contraseña "
+                            "de apertura y censura.</small>"))
         form.addRow(_buttons(self, "Proteger"))
 
     def _toggle(self, on: bool):
         self.user.setEnabled(on)
         self.user_confirm.setEnabled(on)
+
+    def _show(self, on: bool):
+        mode = QLineEdit.Normal if on else QLineEdit.Password
+        for w in (self.user, self.user_confirm, self.owner, self.owner_confirm):
+            w.setEchoMode(mode)
+
+    def _generate(self):
+        pw = core.generate_password()
+        self.owner.setText(pw)
+        self.owner_confirm.setText(pw)
+        self.show_pw.setChecked(True)
+        self.generated = True
+
+    def _restricted(self) -> bool:
+        return not all(c.isChecked() for c in (self.c_print, self.c_copy, self.c_modify, self.c_annot))
 
     def accept(self):
         if self.c_open.isChecked():
@@ -201,85 +227,28 @@ class ProtectDialog(QDialog):
                 return QMessageBox.warning(self, "Proteger", "Escriba la contraseña para abrir.")
             if self.user.text() != self.user_confirm.text():
                 return QMessageBox.warning(self, "Proteger", "Las contraseñas para abrir no coinciden.")
-        if not self.owner.text():
-            return QMessageBox.warning(self, "Proteger", "Escriba la contraseña de permisos.")
+        elif not self._restricted():
+            return QMessageBox.warning(self, "Proteger", "No hay nada que proteger: active la contraseña de "
+                                       "apertura o quite al menos un permiso.")
         if self.owner.text() != self.owner_confirm.text():
             return QMessageBox.warning(self, "Proteger", "Las contraseñas de permisos no coinciden.")
-        if self.c_open.isChecked() and self.owner.text() == self.user.text():
+        if self.owner.text() and self.c_open.isChecked() and self.owner.text() == self.user.text():
             return QMessageBox.warning(self, "Proteger",
                                        "La contraseña de permisos debe ser distinta de la de apertura;\n"
                                        "si son iguales, quien abra el documento no tendrá restricciones.")
+        if not self.owner.text() and self._restricted():
+            self._generate()
         super().accept()
 
     def options(self) -> dict:
         return dict(
             user_password=self.user.text() if self.c_open.isChecked() else "",
-            owner_password=self.owner.text(),
+            owner_password=self.owner.text() or None,
             allow_print=self.c_print.isChecked(),
             allow_copy=self.c_copy.isChecked(),
             allow_modify=self.c_modify.isChecked(),
             allow_annotate=self.c_annot.isChecked(),
         )
-
-
-class RedactDialog(QDialog):
-    """Busca textos y los MARCA como zonas pendientes (se revisan en la vista previa antes de guardar)."""
-
-    def __init__(self, source: Path, password: str | None, parent=None):
-        super().__init__(parent)
-        self.source, self.password = source, password
-        self.hits: dict[int, list] = {}
-        self.setWindowTitle("Censurar por texto")
-        self.resize(500, 380)
-        self.terms = QPlainTextEdit()
-        self.terms.setPlaceholderText("Un texto por línea, p. ej.:\nJuan Pérez\n1234567890")
-        self.regex = QCheckBox("Interpretar como expresiones regulares (p. ej. \\d{10} = 10 dígitos seguidos)")
-        self.meta = QCheckBox("Al guardar, borrar también los metadatos (autor, título…)")
-        self.meta.setChecked(True)
-        self.result = QLabel()
-        self.result.setWordWrap(True)
-        preview = QPushButton("Buscar coincidencias")
-        preview.clicked.connect(self._preview)
-        lay = QVBoxLayout(self)
-        lay.addWidget(QLabel("Textos a censurar. Se marcarán en la vista previa para que los revise;\n"
-                             "puede quitar marcas con clic derecho. Se aplican al guardar."))
-        lay.addWidget(self.terms)
-        lay.addWidget(self.regex)
-        lay.addWidget(self.meta)
-        row = QHBoxLayout()
-        row.addWidget(preview)
-        row.addWidget(self.result, 1)
-        lay.addLayout(row)
-        lay.addWidget(_buttons(self, "Marcar para censurar"))
-
-    def term_list(self) -> list[str]:
-        return [t.strip() for t in self.terms.toPlainText().splitlines() if t.strip()]
-
-    def _search(self) -> bool:
-        try:
-            self.hits = core.find_text(self.source, self.term_list(), regex=self.regex.isChecked(),
-                                       password=self.password)
-        except Exception as exc:
-            self.result.setText(f"Error: {exc}")
-            return False
-        total = sum(len(v) for v in self.hits.values())
-        pages = ", ".join(str(p + 1) for p in sorted(self.hits)) or "ninguna"
-        self.result.setText(f"{total} coincidencia(s) · páginas: {pages}")
-        return True
-
-    def _preview(self):
-        self._search()
-
-    def accept(self):
-        if not self.term_list():
-            QMessageBox.warning(self, "Censurar", "Escriba al menos un texto.")
-            return
-        if not self._search():
-            return
-        if not self.hits:
-            QMessageBox.information(self, "Censurar", "No se encontró ninguna coincidencia.")
-            return
-        super().accept()
 
 
 class CompareDialog(QDialog):
@@ -463,7 +432,7 @@ class SignDialog(QDialog):
     def __init__(self, page_label: str, parent=None):
         super().__init__(parent)
         self.setWindowTitle("Firmar digitalmente")
-        self.setMinimumWidth(560)
+        self.setMinimumWidth(600)
         self.cert = QLineEdit()
         self.cert.setPlaceholderText("Archivo de certificado .p12 / .pfx")
         pick = QPushButton("…")
@@ -471,24 +440,46 @@ class SignDialog(QDialog):
         create = QPushButton("Crear mi certificado…")
         create.clicked.connect(self._create)
         self.pw = QLineEdit(echoMode=QLineEdit.Password)
+        export = QPushButton("Exportar certificado público (.cer)…")
+        export.setToolTip("Comparta este archivo (no contiene su llave) para que otros validen sus firmas")
+        export.clicked.connect(self._export)
         self.reason = QLineEdit()
         self.reason.setPlaceholderText("Ej.: Apruebo el contenido del acta")
         self.location = QLineEdit()
+        self.contact = QLineEdit()
+        self.contact.setPlaceholderText("Correo o teléfono (opcional)")
         self.visible = QCheckBox(f"Mostrar un sello visible en {page_label} (abajo a la derecha)")
         self.visible.setChecked(True)
-        self.lock = QCheckBox("Bloquear el documento: no se permiten cambios después de firmar")
+        self.image = QLineEdit()
+        self.image.setPlaceholderText("Opcional: imagen de su firma manuscrita (PNG/JPG)")
+        pick_img = QPushButton("…")
+        pick_img.clicked.connect(self._pick_image)
+        self.visible.toggled.connect(lambda on: (self.image.setEnabled(on), pick_img.setEnabled(on)))
+        self.lock = QCheckBox("Bloquear el documento: cualquier cambio posterior se marcará como violación")
         self.lock.setChecked(True)
+        self.tsa = QCheckBox("Agregar sello de tiempo de un tercero (necesita internet)")
+        self.tsa.setToolTip("Un servidor de sellado de tiempo (RFC 3161) certifica la fecha y hora de la firma;\n"
+                            "así no depende del reloj de este equipo.")
+        self.tsa_url = QLineEdit(core.DEFAULT_TSA)
+        self.tsa.toggled.connect(self.tsa_url.setEnabled)
+        self.tsa_url.setEnabled(False)
         form = QFormLayout(self)
-        form.addRow(QLabel(
-            "La firma digital sella el documento con su certificado: si alguien cambia algo después,\n"
-            "la verificación (aquí, en Adobe Reader o en otros lectores) lo detecta.\n"
-            "Hágalo como último paso, después de censurar o insertar la imagen de su firma."))
+        form.addRow(_wlabel(
+            "La firma digital sella el documento con su certificado: si alguien cambia algo después, la "
+            "verificación (aquí, en Adobe Reader o en otros lectores) lo detecta. Hágalo como último paso, "
+            "después de censurar."))
         form.addRow("Certificado:", _row(self.cert, pick, create))
         form.addRow("Contraseña del certificado:", self.pw)
+        form.addRow("", export)
         form.addRow("Motivo:", self.reason)
         form.addRow("Lugar:", self.location)
+        form.addRow("Contacto:", self.contact)
         form.addRow(self.visible)
+        form.addRow("Firma manuscrita:", _row(self.image, pick_img))
+        form.addRow(QLabel("<b>Seguridad</b>"))
         form.addRow(self.lock)
+        form.addRow(self.tsa)
+        form.addRow("Servidor de sellado:", self.tsa_url)
         form.addRow(_buttons(self, "Firmar"))
 
     def _pick(self):
@@ -496,16 +487,44 @@ class SignDialog(QDialog):
         if p:
             self.cert.setText(p)
 
+    def _pick_image(self):
+        p, _ = QFileDialog.getOpenFileName(self, "Imagen de la firma", "", "Imágenes (*.png *.jpg *.jpeg *.bmp)")
+        if p:
+            self.image.setText(p)
+
     def _create(self):
         dlg = CertificateDialog(self)
         if dlg.exec() and dlg.path:
             self.cert.setText(str(dlg.path))
             self.pw.setText(dlg.password)
 
+    def _export(self):
+        if not self.cert.text() or not Path(self.cert.text()).exists():
+            return QMessageBox.warning(self, "Exportar", "Elija primero su certificado y escriba su contraseña.")
+        out, _ = QFileDialog.getSaveFileName(self, "Guardar certificado público",
+                                             str(Path(self.cert.text()).with_suffix(".cer")),
+                                             "Certificado público (*.cer)")
+        if not out:
+            return
+        try:
+            path, fp = core.export_public_certificate(self.cert.text(), self.pw.text(), out)
+        except core.PdfTallerError as exc:
+            return QMessageBox.warning(self, "Exportar", str(exc))
+        _info_copy(self, "Exportar", f"Certificado público guardado en:\n{path}\n\nHuella SHA-256 (dígala por "
+                   f"teléfono o en persona a quien lo reciba, para que la compare):\n{fp}", fp)
+
     def accept(self):
         if not self.cert.text() or not Path(self.cert.text()).exists():
             return QMessageBox.warning(self, "Firmar", "Elija un certificado o cree uno.")
+        if self.visible.isChecked() and self.image.text() and not Path(self.image.text()).exists():
+            return QMessageBox.warning(self, "Firmar", "No se encuentra la imagen de la firma.")
         super().accept()
+
+    def options(self) -> dict:
+        return dict(reason=self.reason.text(), location=self.location.text(), contact=self.contact.text(),
+                    lock=self.lock.isChecked(),
+                    signature_image=(self.image.text() or None) if self.visible.isChecked() else None,
+                    timestamp_url=self.tsa_url.text().strip() if self.tsa.isChecked() else None)
 
 
 class CertificateDialog(QDialog):
@@ -519,20 +538,36 @@ class CertificateDialog(QDialog):
         self.email = QLineEdit()
         self.pw = QLineEdit(echoMode=QLineEdit.Password)
         self.pw2 = QLineEdit(echoMode=QLineEdit.Password)
+        self.strength = QLabel()
+        self.pw.textChanged.connect(self._check)
         form = QFormLayout(self)
-        form.addRow(QLabel("Crea un certificado propio (autofirmado) para firmar documentos internos.\n"
-                           "Para firmas con validez legal use el certificado de una entidad certificadora.\n"
-                           "Guarde el archivo .p12 en un lugar seguro: es su llave para firmar."))
+        form.addRow(_wlabel("Crea un certificado propio (autofirmado, RSA 3072 bits) para firmar documentos "
+                            "internos. Para firmas con validez legal use el certificado de una entidad "
+                            "certificadora. Guarde el archivo .p12 en un lugar seguro: es su llave para firmar."))
         form.addRow("Nombre completo:", self.name)
         form.addRow("Organización:", self.org)
         form.addRow("Correo:", self.email)
         form.addRow("Contraseña:", self.pw)
+        form.addRow("", self.strength)
         form.addRow("Repetir:", self.pw2)
         form.addRow(_buttons(self, "Crear"))
+        self._check("")
+
+    def _check(self, text: str):
+        try:
+            core.check_password_strength(text)
+            self.strength.setText("<span style='color:#1a7f37'>✔ Contraseña robusta</span>")
+        except core.PdfTallerError:
+            self.strength.setText("<small>Mínimo 8 caracteres combinando 3 de: minúsculas, mayúsculas, "
+                                  "números y símbolos.</small>")
 
     def accept(self):
         if self.pw.text() != self.pw2.text():
             return QMessageBox.warning(self, "Certificado", "Las contraseñas no coinciden.")
+        try:
+            core.check_password_strength(self.pw.text())
+        except core.PdfTallerError as exc:
+            return QMessageBox.warning(self, "Certificado", str(exc))
         out, _ = QFileDialog.getSaveFileName(self, "Guardar certificado",
                                              f"{self.name.text().strip() or 'certificado'}.p12",
                                              "Certificado (*.p12)")
@@ -542,34 +577,122 @@ class CertificateDialog(QDialog):
             self.path = core.create_certificate(out, self.name.text(), self.pw.text(),
                                                 email=self.email.text() or None,
                                                 organization=self.org.text() or None)
+            # El certificado propio es de confianza en este equipo; se exporta su parte pública.
+            cer, fp = core.export_public_certificate(self.path, self.pw.text(), Path(out).with_suffix(".cer"))
+            core.trust_certificate(cer)
         except core.PdfTallerError as exc:
             return QMessageBox.warning(self, "Certificado", str(exc))
         self.password = self.pw.text()
+        _info_copy(self, "Certificado", f"Certificado creado:\n{self.path}\n\nParte pública para compartir:\n{cer}\n\n"
+                   f"Huella SHA-256:\n{fp}", fp)
         super().accept()
 
 
+def _info_copy(parent, title: str, text: str, to_copy: str):
+    """Mensaje con un botón para copiar un valor (huella, contraseña)."""
+    box = QMessageBox(QMessageBox.Information, title, text, QMessageBox.Ok, parent)
+    copy_btn = box.addButton("Copiar", QMessageBox.ActionRole)
+    box.setTextInteractionFlags(Qt.TextSelectableByMouse)
+    while True:
+        box.exec()
+        if box.clickedButton() is copy_btn:
+            QGuiApplication.clipboard().setText(to_copy)
+            box.setInformativeText("✔ Copiado al portapapeles.")
+            continue
+        break
+
+
 class CompressDialog(QDialog):
-    def __init__(self, parent=None):
+    def __init__(self, source: Path, password: str | None, parent=None):
         super().__init__(parent)
+        self.source, self.password = source, password
         self.setWindowTitle("Comprimir PDF")
-        self.levels = {}
+        self.setMinimumWidth(560)
+        self.levels: dict[str, QRadioButton] = {}
+        self.texts = {"baja": "Baja — sin pérdida (limpia el archivo y recorta fuentes)",
+                      "media": "Media — imágenes a 150 ppp, buena para imprimir",
+                      "alta": "Alta — imágenes a 96 ppp, la más pequeña, para correo o web",
+                      "personalizada": "Personalizada:"}
         lay = QVBoxLayout(self)
-        lay.addWidget(QLabel("Nivel de compresión:"))
+        self.analysis = QLabel()
+        self.analysis.setWordWrap(True)
+        self.analysis.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        self.analysis.setStyleSheet("background:#f3f4f6; padding:6px; border-radius:4px")
+        lay.addWidget(self.analysis)
+        lay.addWidget(QLabel("<b>Nivel de compresión</b>"))
         grp = QButtonGroup(self)
-        for key, text in [("baja", "Baja — sin pérdida de calidad (limpia el archivo y las fuentes)"),
-                          ("media", "Media — recomendada: imágenes a 150 ppp, buena para imprimir"),
-                          ("alta", "Alta — el más pequeño: imágenes a 96 ppp, para correo o web")]:
+        for key, text in self.texts.items():
             r = QRadioButton(text)
             grp.addButton(r)
             self.levels[key] = r
             lay.addWidget(r)
-        self.levels["media"].setChecked(True)
+        self.dpi = QSpinBox()
+        self.dpi.setRange(36, 600)
+        self.dpi.setValue(120)
+        self.dpi.setSuffix(" ppp")
+        self.quality = QSpinBox()
+        self.quality.setRange(10, 100)
+        self.quality.setValue(70)
+        self.quality.setPrefix("calidad JPEG ")
+        custom = QHBoxLayout()
+        custom.addSpacing(24)
+        custom.addWidget(QLabel("Resolución de imágenes:"))
+        custom.addWidget(self.dpi)
+        custom.addWidget(self.quality)
+        custom.addStretch()
+        lay.addLayout(custom)
+        for w in (self.dpi, self.quality):
+            w.valueChanged.connect(lambda *_: self.levels["personalizada"].setChecked(True))
         self.gray = QCheckBox("Convertir las imágenes a escala de grises")
+        self.strip = QCheckBox("Quitar metadatos, adjuntos y JavaScript")
         lay.addWidget(self.gray)
+        lay.addWidget(self.strip)
+        est = QPushButton("Calcular tamaño de cada nivel")
+        est.clicked.connect(self._estimate)
+        lay.addWidget(est)
         lay.addWidget(_buttons(self, "Comprimir"))
+        try:
+            a = core.analyze(source, password)
+            self.analysis.setText(escape(a.message()).replace("\n", "<br>"))
+            self.levels[a.recommendation()].setChecked(True)
+        except core.PdfTallerError as exc:
+            self.analysis.setText(escape(str(exc)))
+            self.levels["media"].setChecked(True)
+
+    def _estimate(self):
+        from .worker import run_busy
+        try:
+            sizes = run_busy(self, "Comprimir", "Calculando tamaños…", core.estimate_compression,
+                             self.source, password=self.password, gray=self.gray.isChecked(),
+                             strip=self.strip.isChecked())
+            sizes["personalizada"] = run_busy(self, "Comprimir", "Calculando tamaños…", self._custom_size)
+        except core.PdfTallerError as exc:
+            return QMessageBox.warning(self, "Comprimir", str(exc))
+        before = self.source.stat().st_size
+        for k, r in self.levels.items():
+            n = sizes.get(k)
+            if n is not None:
+                pct = 100 * (1 - n / before) if before else 0
+                r.setText(f"{self.texts[k]}   →  {_size(n)} (−{max(pct, 0):.0f} %)")
+
+    def _custom_size(self) -> int:
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmp:
+            return core.compress(self.source, Path(tmp) / "c.pdf", **self.options()).after
 
     def level(self) -> str:
-        return next(k for k, r in self.levels.items() if r.isChecked())
+        k = next(k for k, r in self.levels.items() if r.isChecked())
+        return "media" if k == "personalizada" else k
+
+    def options(self) -> dict:
+        custom = self.levels["personalizada"].isChecked()
+        return dict(level=self.level(), gray=self.gray.isChecked(), strip=self.strip.isChecked(),
+                    dpi=self.dpi.value() if custom else None, quality=self.quality.value() if custom else None,
+                    password=self.password)
+
+
+def _size(n: int) -> str:
+    return f"{n / 1_048_576:.2f} MB" if n >= 1_048_576 else f"{n / 1024:.0f} KB"
 
 
 class OcrDialog(QDialog):
@@ -587,41 +710,148 @@ class OcrDialog(QDialog):
             self.lang.addItem(label, code)
         self.only = QCheckBox("Solo páginas escaneadas (sin texto)")
         self.only.setChecked(True)
+        self.keep = QCheckBox("Conservar la página original y agregar el texto invisible encima (recomendado)")
+        self.keep.setChecked(True)
+        self.keep.setToolTip("Sin pérdida de calidad y el archivo casi no crece.\n"
+                             "Desmarcado: cada página se reemplaza por una imagen nueva con el texto.")
         self.dpi = QSpinBox()
         self.dpi.setRange(150, 600)
         self.dpi.setValue(300)
         self.dpi.setSuffix(" ppp")
         form = QFormLayout(self)
-        form.addRow(QLabel("Convierte páginas escaneadas en texto que se puede buscar, copiar y censurar."))
+        form.addRow(_wlabel("Convierte páginas escaneadas en texto que se puede buscar, copiar y censurar."))
         form.addRow("Idioma:", self.lang)
-        form.addRow("Resolución:", self.dpi)
+        form.addRow("Resolución de lectura:", self.dpi)
         form.addRow(self.only)
+        form.addRow(self.keep)
         form.addRow(_buttons(self, "Reconocer"))
 
 
 class SignaturesDialog(QDialog):
     def __init__(self, path: Path, parent=None):
         super().__init__(parent)
+        self.path = path
         self.setWindowTitle(f"Firmas digitales de «{path.name}»")
-        self.resize(640, 320)
-        out = QTextBrowser()
+        self.resize(720, 460)
+        self.out = QTextBrowser()
+        self.out.setOpenLinks(False)
+        self.out.anchorClicked.connect(self._link)
         lay = QVBoxLayout(self)
-        lay.addWidget(out)
-        close = QDialogButtonBox(QDialogButtonBox.Close)
-        close.button(QDialogButtonBox.Close).setText("Cerrar")
-        close.rejected.connect(self.reject)
-        lay.addWidget(close)
+        lay.addWidget(self.out)
+        row = QHBoxLayout()
+        manage = QPushButton("Certificados de confianza…")
+        manage.clicked.connect(lambda: (TrustDialog(self).exec(), self._load()))
+        row.addWidget(manage)
+        row.addStretch()
+        close = QPushButton("Cerrar")
+        close.clicked.connect(self.reject)
+        row.addWidget(close)
+        lay.addLayout(row)
+        self._load()
+
+    def _load(self):
         try:
-            sigs = core.verify_signatures(path)
+            self.sigs = core.verify_signatures(self.path)
         except Exception as exc:
-            out.setPlainText(f"No se pudieron verificar las firmas: {exc}")
+            self.out.setPlainText(f"No se pudieron verificar las firmas: {exc}")
             return
-        if not sigs:
-            out.setHtml("<p>Este documento no tiene firmas digitales.</p>")
+        if not self.sigs:
+            self.out.setHtml("<p>Este documento no tiene firmas digitales.</p>")
             return
         h = []
-        for s in sigs:
-            color = "#1a7f37" if s.intact and s.covers_all else ("#b35900" if s.intact else "#b00")
-            h.append(f"<p><b style='color:{color}'>{escape(s.summary)}</b><br>"
-                     f"Firmante: {escape(s.signer)}<br>Fecha: {escape(s.signed_at)}<br>Campo: {escape(s.field)}</p>")
-        out.setHtml("".join(h))
+        for i, s in enumerate(self.sigs):
+            ok = s.intact and (s.covers_all or s.changes in ("ninguno", "solo datos de validación"))
+            color = "#1a7f37" if ok and s.trusted else ("#b35900" if s.intact else "#b00")
+            h.append(f"<h3 style='color:{color}'>{escape(s.summary)}</h3>")
+            h.append("<table cellpadding=2>")
+            for k, v in [("Firmante", s.signer), ("Emisor", s.issuer + (" (autofirmado)" if s.self_signed else "")),
+                         ("Fecha indicada", s.signed_at),
+                         ("Sello de tiempo", s.timestamp or "no tiene"),
+                         ("Certificado válido", f"{s.valid_from} a {s.valid_until}" + (" — VENCIDO" if s.cert_expired else "")),
+                         ("Documento bloqueado", "sí" if s.certified else "no"),
+                         ("De confianza", "sí" if s.trusted else "no"),
+                         ("Huella SHA-256", s.fingerprint)]:
+                h.append(f"<tr><td><b>{k}:</b></td><td><code>{escape(v)}</code></td></tr>" if k == "Huella SHA-256"
+                         else f"<tr><td><b>{k}:</b></td><td>{escape(v)}</td></tr>")
+            h.append("</table>")
+            for d in s.details:
+                h.append(f"<p>• {escape(d)}</p>")
+            if s.intact and not s.trusted:
+                h.append(f"<p><a href='trust:{i}'>Confiar en el certificado de este firmante…</a></p>")
+            h.append("<hr>")
+        self.out.setHtml("".join(h))
+
+    def _link(self, url):
+        if url.scheme() != "trust":
+            return
+        s = self.sigs[int(url.path())]
+        r = QMessageBox.question(
+            self, "Confiar en el certificado",
+            f"Firmante: {s.signer}\n\nHuella SHA-256:\n{s.fingerprint}\n\n"
+            "Compare esta huella con la que le dé el firmante por otro medio (en persona, por teléfono). "
+            "Si coincide, sus firmas se mostrarán como verificadas en este equipo.\n\n¿Confiar en este certificado?")
+        if r == QMessageBox.Yes:
+            core.trust_certificate(core.signer_certificate(self.path, int(url.path())), s.signer)
+            self._load()
+
+
+class TrustDialog(QDialog):
+    """Lista de certificados de confianza de este equipo."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Certificados de confianza")
+        self.resize(640, 320)
+        self.list = QListWidget()
+        lay = QVBoxLayout(self)
+        lay.addWidget(_wlabel("Las firmas hechas con estos certificados se muestran como verificadas. "
+                              f"Carpeta: {core.trust_dir()}"))
+        lay.addWidget(self.list)
+        row = QHBoxLayout()
+        add = QPushButton("Importar .cer…")
+        add.clicked.connect(self._add)
+        rm = QPushButton("Quitar")
+        rm.clicked.connect(self._remove)
+        row.addWidget(add)
+        row.addWidget(rm)
+        row.addStretch()
+        close = QPushButton("Cerrar")
+        close.clicked.connect(self.accept)
+        row.addWidget(close)
+        lay.addLayout(row)
+        self._load()
+
+    def _load(self):
+        from cryptography import x509
+        import hashlib
+        self.list.clear()
+        for p in core.trusted_certificates():
+            data = p.read_bytes()
+            try:
+                c = x509.load_der_x509_certificate(data)
+            except ValueError:
+                try:
+                    c = x509.load_pem_x509_certificate(data)
+                except ValueError:
+                    continue
+            from cryptography.hazmat.primitives.serialization import Encoding
+            fp = hashlib.sha256(c.public_bytes(Encoding.DER)).hexdigest().upper()
+            fp = ":".join(fp[i:i + 2] for i in range(0, len(fp), 2))
+            it = QListWidgetItem(f"{c.subject.rfc4514_string()}\n   huella {fp[:47]}…  ·  vence {c.not_valid_after_utc.date()}")
+            it.setData(Qt.UserRole, fp)
+            self.list.addItem(it)
+
+    def _add(self):
+        p, _ = QFileDialog.getOpenFileName(self, "Certificado público", "", "Certificados (*.cer *.crt *.pem *.der)")
+        if p:
+            try:
+                core.trust_certificate(p)
+            except Exception as exc:
+                QMessageBox.warning(self, "Importar", f"No es un certificado válido: {exc}")
+            self._load()
+
+    def _remove(self):
+        it = self.list.currentItem()
+        if it and QMessageBox.question(self, "Quitar", "¿Dejar de confiar en este certificado?") == QMessageBox.Yes:
+            core.untrust_certificate(it.data(Qt.UserRole))
+            self._load()

@@ -63,8 +63,8 @@ def test_ocr(tmp_path):
 
 
 def test_digital_signature(tmp_path, pdf3):
-    p12 = core.create_certificate(tmp_path / "yo.p12", "Cristian Prueba", "clave123", organization="UMNG")
-    signed = core.sign(pdf3, tmp_path / "s.pdf", p12, "clave123", reason="Aprobado",
+    p12 = core.create_certificate(tmp_path / "yo.p12", "Cristian Prueba", "Clave-123", organization="UMNG")
+    signed = core.sign(pdf3, tmp_path / "s.pdf", p12, "Clave-123", reason="Aprobado",
                        page=0, rect=(72, 600, 272, 680))
     st = core.verify_signatures(signed)
     assert len(st) == 1 and st[0].intact and st[0].covers_all and "Cristian" in st[0].signer
