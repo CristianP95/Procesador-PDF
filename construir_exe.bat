@@ -18,6 +18,15 @@ set "VPY=.venv-build\Scripts\python.exe"
 "%VPY%" -m pip install --upgrade pip || goto :fallo
 "%VPY%" -m pip install -e ".[gui]" pyinstaller || goto :fallo
 
+REM Datos de OCR (espanol e ingles, version rapida) para incluirlos en el ejecutable
+if not exist "tessdata" mkdir tessdata
+for %%L in (spa eng) do (
+    if not exist "tessdata\%%L.traineddata" (
+        echo Descargando datos de OCR: %%L...
+        curl -L -f -o "tessdata\%%L.traineddata" "https://github.com/tesseract-ocr/tessdata_fast/raw/main/%%L.traineddata" || echo [AVISO] No se pudo descargar %%L; el OCR necesitara Tesseract instalado.
+    )
+)
+
 echo Construyendo el ejecutable...
 "%VPY%" -m PyInstaller --noconfirm --clean PDFTaller.spec || goto :fallo
 

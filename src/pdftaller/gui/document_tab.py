@@ -5,9 +5,10 @@ pendientes hasta Guardar; entonces se aplican con las funciones de ``pdftaller.c
 """
 from __future__ import annotations
 
+import copy
 import tempfile
 from collections import defaultdict
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 import pymupdf
@@ -32,6 +33,7 @@ class Mark:
     page: int                  # índice original
     rect: tuple                # puntos PDF, sistema sin rotar
     image: str | None = None
+    origin: str = "zona"       # "zona" (dibujada) | "texto" (búsqueda)
 
 
 def _to_qpixmap(pix: pymupdf.Pixmap) -> QPixmap:
@@ -55,16 +57,23 @@ class DocumentTab(QWidget):
         self._doc: pymupdf.Document | None = None
         self._thumbs: list[QPixmap] = []
         self._preview_page: int | None = None
+        self._undo: list = []
+        self._redo: list = []
+        self.read_only = False     # documento con restricciones y sin contraseña de propietario
+        self.signed = False        # tiene firmas digitales (editar las invalida)
+        self.scrub_metadata = False
 
         self.info = QLabel()
         self.info.setWordWrap(True)
         self.pages = PageList(THUMB)
         self.pages.order_changed.connect(self._on_order_changed)
+        self.pages.about_to_change = self.push_undo
         self.pages.currentItemChanged.connect(lambda *_: self.show_preview())
 
         # --- vista previa
         self.view = PageView()
         self.view.rect_drawn.connect(self._on_rect_drawn)
+        self.view.mark_menu_requested.connect(self._mark_menu)
         self.scroll = QScrollArea()
         self.scroll.setWidget(self.view)
         self.scroll.setAlignment(Qt.AlignCenter)
@@ -117,6 +126,7 @@ class DocumentTab(QWidget):
         return any(m.kind == "redact" for m in self.marks)
 
     def _set_modified(self, value: bool):
+        self._renumber()
         if value != self._modified:
             self._modified = value
             self.modified_changed.emit(value)
@@ -128,8 +138,12 @@ class DocumentTab(QWidget):
     def _update_info(self):
         n = self.pages.count()
         parts = [str(self.path), f"{n} páginas"]
-        if self.password:
+        if self.read_only:
+            parts.append("🔒 SOLO LECTURA: tiene restricciones (use Desbloquear con la contraseña de propietario)")
+        elif self.password:
             parts.append("protegido")
+        if self.signed:
+            parts.append("✍ FIRMADO DIGITALMENTE: cualquier cambio invalidará la firma")
         nr = sum(m.kind == "redact" for m in self.marks)
         ni = sum(m.kind == "image" for m in self.marks)
         if nr:
@@ -150,8 +164,19 @@ class DocumentTab(QWidget):
         self._thumbs.clear()
         self.marks.clear()
         self._doc = pymupdf.open(stream=self.path.read_bytes(), filetype="pdf")
+        auth = 0
         if self._doc.needs_pass:
-            self._doc.authenticate(self.password or "")
+            auth = self._doc.authenticate(self.password or "")
+        elif self.password:
+            auth = self._doc.authenticate(self.password)
+        # Con cifrado, solo la contraseña de propietario (bit 4) da permiso total.
+        self.read_only = bool(self._doc.metadata.get("encryption")) and not (auth & 4) \
+            and not (self._doc.permissions & pymupdf.PDF_PERM_MODIFY)
+        self.signed = bool(self._doc.get_sigflags() > 0)
+        self.scrub_metadata = False
+        self.pages.locked = self.read_only
+        self._undo.clear()
+        self._redo.clear()
         for page in self._doc:
             zoom = THUMB / max(page.rect.width, page.rect.height)
             self._thumbs.append(_to_qpixmap(page.get_pixmap(matrix=pymupdf.Matrix(zoom, zoom), alpha=False)))
@@ -184,10 +209,12 @@ class DocumentTab(QWidget):
         self._set_modified(True)
 
     def _renumber(self):
+        with_marks = {m.page for m in self.marks}
         for i in range(self.pages.count()):
             it = self.pages.item(i)
             orig = it.data(ROLE_PAGE) + 1
-            it.setText(str(i + 1) if orig == i + 1 else f"{i + 1}  (era {orig})")
+            text = str(i + 1) if orig == i + 1 else f"{i + 1}  (era {orig})"
+            it.setText(("■ " + text) if orig - 1 in with_marks else text)
             it.setToolTip(f"Posición {i + 1} · página original {orig}")
 
     # ------------------------------------------------------------ vista previa
@@ -216,7 +243,7 @@ class DocumentTab(QWidget):
             if mk.page == orig:
                 r = pymupdf.Rect(mk.rect) * t
                 img = QPixmap(mk.image).transformed(QTransform().rotate(pending)) if mk.image else None
-                marks.append((mk.kind, QRectF(r.x0, r.y0, r.width, r.height), img))
+                marks.append(("redact-texto" if mk.kind == "redact" and mk.origin == "texto" else mk.kind, QRectF(r.x0, r.y0, r.width, r.height), img))
         self.view.set_page(pix, marks)
         self.page_label.setText(f"Página {self.pages.row(it) + 1} de {self.pages.count()}  ·  {int(self.zoom * 100)} %")
 
@@ -242,6 +269,12 @@ class DocumentTab(QWidget):
 
     # ------------------------------------------------------------ zonas y firmas
     def _set_mode(self, mode: str | None):
+        if mode and not self.can_edit():
+            for b in (self.btn_redact, self.btn_sign):
+                b.blockSignals(True)
+                b.setChecked(False)
+                b.blockSignals(False)
+            return
         if mode == "image" and not self.signature_image:
             self.status.emit("Elija primero la imagen de la firma")
             self.request_signature_image()
@@ -269,6 +302,7 @@ class DocumentTab(QWidget):
         _, t = self._render_matrix(self._preview_page, it.data(ROLE_ROT))
         pr = pymupdf.Rect(r.x(), r.y(), r.x() + r.width(), r.y() + r.height()) * ~t
         kind = self.view.mode
+        self.push_undo()
         self.marks.append(Mark(kind, self._preview_page, tuple(pr),
                                self.signature_image if kind == "image" else None))
         self._set_modified(True)
@@ -277,21 +311,115 @@ class DocumentTab(QWidget):
     def undo_mark(self):
         for i in range(len(self.marks) - 1, -1, -1):
             if self.marks[i].page == self._preview_page:
-                del self.marks[i]
-                self._set_modified(bool(self.marks) or self._order_or_rotation_changed())
-                self.show_preview()
+                self.remove_marks([self.marks[i]])
                 return
 
     def _order_or_rotation_changed(self) -> bool:
         return any(self.pages.item(i).data(ROLE_PAGE) != i or self.pages.item(i).data(ROLE_ROT)
                    for i in range(self.pages.count())) or self.pages.count() != len(self._thumbs)
 
+    def can_edit(self) -> bool:
+        if self.read_only:
+            self.status.emit("Documento con restricciones: use Seguridad → Desbloquear con la contraseña de permisos")
+            return False
+        return True
+
+    # ------------------------------------------------------------ deshacer / rehacer
+    def _state(self):
+        items = [(self.pages.item(i).data(ROLE_PAGE), self.pages.item(i).data(ROLE_ROT))
+                 for i in range(self.pages.count())]
+        return items, copy.deepcopy(self.marks), self._modified
+
+    def push_undo(self):
+        self._undo.append(self._state())
+        del self._undo[:-100]
+        self._redo.clear()
+
+    def _restore(self, state):
+        items, marks, modified = state
+        cur = self.pages.currentRow()
+        self.pages.blockSignals(True)
+        self.pages.clear()
+        for orig, rot in items:
+            pm = self._thumbs[orig].transformed(QTransform().rotate(rot)) if rot else self._thumbs[orig]
+            it = QListWidgetItem(QIcon(pm), "")
+            it.setData(ROLE_PAGE, orig)
+            it.setData(ROLE_ROT, rot)
+            it.setTextAlignment(Qt.AlignHCenter)
+            self.pages.addItem(it)
+        self.pages.blockSignals(False)
+        self.marks = marks
+        self._renumber()
+        self.pages.setCurrentRow(max(0, min(cur, self.pages.count() - 1)))
+        self._set_modified(modified)
+        self.show_preview()
+
+    def undo(self) -> bool:
+        if not self._undo:
+            return False
+        self._redo.append(self._state())
+        self._restore(self._undo.pop())
+        return True
+
+    def redo(self) -> bool:
+        if not self._redo:
+            return False
+        self._undo.append(self._state())
+        self._restore(self._redo.pop())
+        return True
+
+    # ------------------------------------------------------------ zonas: quitar
+    def _mark_menu(self, index: int, global_pos):
+        from PySide6.QtWidgets import QMenu
+        page_marks = [m for m in self.marks if m.page == self._preview_page]
+        m = QMenu(self)
+        if 0 <= index < len(page_marks):
+            mk = page_marks[index]
+            label = "firma" if mk.kind == "image" else f"zona censurada ({mk.origin})"
+            m.addAction(f"Quitar esta {label}", lambda: self.remove_marks([mk]))
+        if page_marks:
+            m.addAction("Quitar todas las marcas de esta página", lambda: self.remove_marks(page_marks))
+        if self.marks:
+            m.addAction("Quitar todas las zonas censuradas del documento",
+                        lambda: self.remove_marks([x for x in self.marks if x.kind == "redact"]))
+        if not m.isEmpty():
+            m.exec(global_pos)
+
+    def remove_marks(self, marks):
+        if not marks:
+            return
+        self.push_undo()
+        ids = {id(x) for x in marks}
+        self.marks = [x for x in self.marks if id(x) not in ids]
+        self._set_modified(bool(self.marks) or self._order_or_rotation_changed())
+        self.show_preview()
+
+    def add_text_redactions(self, hits: dict[int, list]) -> int:
+        if not self.can_edit():
+            return 0
+        """Agrega como zonas pendientes los resultados de una búsqueda (índices de página originales)."""
+        rects = [(p, tuple(r)) for p, rs in hits.items() for r in rs]
+        known = {(m.page, tuple(round(v, 1) for v in m.rect)) for m in self.marks if m.kind == "redact"}
+        new = [(p, r) for p, r in rects if (p, tuple(round(v, 1) for v in r)) not in known]
+        if not new:
+            return 0
+        self.push_undo()
+        for p, r in new:
+            self.marks.append(Mark("redact", p, r, origin="texto"))
+        self._set_modified(True)
+        self.show_preview()
+        return len(new)
+
     # ------------------------------------------------------------ ediciones de páginas
     def selected_items(self) -> list[QListWidgetItem]:
         return sorted(self.pages.selectedItems(), key=self.pages.row)
 
     def rotate_selected(self, degrees: int) -> bool:
+        if not self.can_edit():
+            return True
         items = self.selected_items()
+        if items:
+            self.push_undo()
         for it in items:
             rot = (it.data(ROLE_ROT) + degrees) % 360
             it.setData(ROLE_ROT, rot)
@@ -302,9 +430,13 @@ class DocumentTab(QWidget):
         return bool(items)
 
     def delete_selected(self) -> int:
+        if not self.can_edit():
+            return -2
         items = self.selected_items()
         if len(items) >= self.pages.count():
             return -1
+        if items:
+            self.push_undo()
         for it in items:
             self.pages.takeItem(self.pages.row(it))
         if items:
@@ -313,6 +445,8 @@ class DocumentTab(QWidget):
         return len(items)
 
     def move_selected(self, where: str | int):
+        if not self.can_edit():
+            return
         rows = self.pages.selected_rows()
         if not rows:
             return
@@ -347,7 +481,7 @@ class DocumentTab(QWidget):
             else:
                 images.append((pos_of[m.page], m.rect, m.image))
         if areas:
-            core.redact(out, out, areas=areas, remove_metadata=False, password=self.password)
+            core.redact(out, out, areas=areas, remove_metadata=self.scrub_metadata, password=self.password)
         if images:
             core.insert_images(out, out, images, password=self.password)
         return out

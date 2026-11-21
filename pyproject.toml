@@ -4,11 +4,11 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "pdftaller"
-version = "0.2.0"
+version = "0.3.0"
 description = "Herramienta de código abierto para manipular PDFs: ordenar, optimizar, convertir, editar y proteger."
 readme = "README.md"
 requires-python = ">=3.10"
-dependencies = ["pymupdf>=1.24"]
+dependencies = ["pymupdf>=1.24", "pyhanko>=0.25", "pyhanko-certvalidator>=0.26", "cryptography>=42"]
 
 [project.optional-dependencies]
 gui = ["PySide6>=6.6"]

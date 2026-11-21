@@ -156,40 +156,65 @@ class SplitDialog(QDialog):
 
 
 class ProtectDialog(QDialog):
+    """Dos contraseñas: una para ABRIR (opcional) y otra de PERMISOS (propietario, obligatoria)."""
+
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setWindowTitle("Proteger PDF")
+        self.setMinimumWidth(520)
+        self.c_open = QCheckBox("Pedir contraseña para abrir el documento")
         self.user = QLineEdit(echoMode=QLineEdit.Password)
-        self.confirm = QLineEdit(echoMode=QLineEdit.Password)
+        self.user_confirm = QLineEdit(echoMode=QLineEdit.Password)
         self.owner = QLineEdit(echoMode=QLineEdit.Password)
-        self.owner.setPlaceholderText("Opcional (por defecto, la misma)")
-        self.c_print = QCheckBox("Permitir imprimir")
+        self.owner_confirm = QLineEdit(echoMode=QLineEdit.Password)
+        self.c_print = QCheckBox("Imprimir")
         self.c_print.setChecked(True)
-        self.c_copy = QCheckBox("Permitir copiar texto")
-        self.c_modify = QCheckBox("Permitir modificar")
-        self.c_annot = QCheckBox("Permitir comentarios y formularios")
+        self.c_copy = QCheckBox("Copiar texto e imágenes")
+        self.c_modify = QCheckBox("Modificar (mover, eliminar, editar páginas)")
+        self.c_annot = QCheckBox("Comentarios y rellenar formularios")
+        self.c_open.toggled.connect(self._toggle)
+        self._toggle(False)
+
         form = QFormLayout(self)
+        form.addRow(QLabel("<b>1. Apertura</b>"))
+        form.addRow(self.c_open)
         form.addRow("Contraseña para abrir:", self.user)
-        form.addRow("Repetir contraseña:", self.confirm)
-        form.addRow("Contraseña de propietario:", self.owner)
+        form.addRow("Repetir:", self.user_confirm)
+        form.addRow(QLabel("<b>2. Permisos</b> — quien abra el documento podrá:"))
         for c in (self.c_print, self.c_copy, self.c_modify, self.c_annot):
             form.addRow(c)
-        form.addRow(QLabel("Cifrado: AES-256"))
+        form.addRow(_wlabel("<b>3. Contraseña de permisos</b> (propietario): quita todas las restricciones. "
+                            "Debe ser distinta de la de apertura. Guárdela: sin ella no se puede desbloquear."))
+        form.addRow("Contraseña de permisos:", self.owner)
+        form.addRow("Repetir:", self.owner_confirm)
+        form.addRow(_wlabel("<small>Cifrado AES-256. Las restricciones las respetan Adobe Reader, Edge, Chrome y "
+                            "PDF Taller; algunos programas podrían ignorarlas.</small>"))
         form.addRow(_buttons(self, "Proteger"))
 
+    def _toggle(self, on: bool):
+        self.user.setEnabled(on)
+        self.user_confirm.setEnabled(on)
+
     def accept(self):
-        if not self.user.text():
-            QMessageBox.warning(self, "Proteger", "Escriba una contraseña.")
-            return
-        if self.user.text() != self.confirm.text():
-            QMessageBox.warning(self, "Proteger", "Las contraseñas no coinciden.")
-            return
+        if self.c_open.isChecked():
+            if not self.user.text():
+                return QMessageBox.warning(self, "Proteger", "Escriba la contraseña para abrir.")
+            if self.user.text() != self.user_confirm.text():
+                return QMessageBox.warning(self, "Proteger", "Las contraseñas para abrir no coinciden.")
+        if not self.owner.text():
+            return QMessageBox.warning(self, "Proteger", "Escriba la contraseña de permisos.")
+        if self.owner.text() != self.owner_confirm.text():
+            return QMessageBox.warning(self, "Proteger", "Las contraseñas de permisos no coinciden.")
+        if self.c_open.isChecked() and self.owner.text() == self.user.text():
+            return QMessageBox.warning(self, "Proteger",
+                                       "La contraseña de permisos debe ser distinta de la de apertura;\n"
+                                       "si son iguales, quien abra el documento no tendrá restricciones.")
         super().accept()
 
     def options(self) -> dict:
         return dict(
-            user_password=self.user.text(),
-            owner_password=self.owner.text() or None,
+            user_password=self.user.text() if self.c_open.isChecked() else "",
+            owner_password=self.owner.text(),
             allow_print=self.c_print.isChecked(),
             allow_copy=self.c_copy.isChecked(),
             allow_modify=self.c_modify.isChecked(),
@@ -198,21 +223,26 @@ class ProtectDialog(QDialog):
 
 
 class RedactDialog(QDialog):
+    """Busca textos y los MARCA como zonas pendientes (se revisan en la vista previa antes de guardar)."""
+
     def __init__(self, source: Path, password: str | None, parent=None):
         super().__init__(parent)
         self.source, self.password = source, password
-        self.setWindowTitle("Censurar PDF")
-        self.resize(480, 360)
+        self.hits: dict[int, list] = {}
+        self.setWindowTitle("Censurar por texto")
+        self.resize(500, 380)
         self.terms = QPlainTextEdit()
         self.terms.setPlaceholderText("Un texto por línea, p. ej.:\nJuan Pérez\n1234567890")
-        self.regex = QCheckBox("Interpretar como expresiones regulares (p. ej. \\d{10})")
-        self.meta = QCheckBox("Borrar también los metadatos (autor, título…)")
+        self.regex = QCheckBox("Interpretar como expresiones regulares (p. ej. \\d{10} = 10 dígitos seguidos)")
+        self.meta = QCheckBox("Al guardar, borrar también los metadatos (autor, título…)")
         self.meta.setChecked(True)
         self.result = QLabel()
+        self.result.setWordWrap(True)
         preview = QPushButton("Buscar coincidencias")
         preview.clicked.connect(self._preview)
         lay = QVBoxLayout(self)
-        lay.addWidget(QLabel("Textos a censurar. Se eliminan del archivo, no solo se tapan:"))
+        lay.addWidget(QLabel("Textos a censurar. Se marcarán en la vista previa para que los revise;\n"
+                             "puede quitar marcas con clic derecho. Se aplican al guardar."))
         lay.addWidget(self.terms)
         lay.addWidget(self.regex)
         lay.addWidget(self.meta)
@@ -220,24 +250,34 @@ class RedactDialog(QDialog):
         row.addWidget(preview)
         row.addWidget(self.result, 1)
         lay.addLayout(row)
-        lay.addWidget(_buttons(self, "Censurar"))
+        lay.addWidget(_buttons(self, "Marcar para censurar"))
 
     def term_list(self) -> list[str]:
         return [t.strip() for t in self.terms.toPlainText().splitlines() if t.strip()]
 
-    def _preview(self):
+    def _search(self) -> bool:
         try:
-            hits = core.find_text(self.source, self.term_list(), regex=self.regex.isChecked(), password=self.password)
+            self.hits = core.find_text(self.source, self.term_list(), regex=self.regex.isChecked(),
+                                       password=self.password)
         except Exception as exc:
             self.result.setText(f"Error: {exc}")
-            return
-        total = sum(len(v) for v in hits.values())
-        pages = ", ".join(str(p + 1) for p in sorted(hits)) or "ninguna"
+            return False
+        total = sum(len(v) for v in self.hits.values())
+        pages = ", ".join(str(p + 1) for p in sorted(self.hits)) or "ninguna"
         self.result.setText(f"{total} coincidencia(s) · páginas: {pages}")
+        return True
+
+    def _preview(self):
+        self._search()
 
     def accept(self):
         if not self.term_list():
             QMessageBox.warning(self, "Censurar", "Escriba al menos un texto.")
+            return
+        if not self._search():
+            return
+        if not self.hits:
+            QMessageBox.information(self, "Censurar", "No se encontró ninguna coincidencia.")
             return
         super().accept()
 
@@ -397,6 +437,12 @@ def ask_password(parent: QWidget, name: str) -> str | None:
     return pw if ok else None
 
 
+def _wlabel(text: str) -> QLabel:
+    lab = QLabel(text)
+    lab.setWordWrap(True)
+    return lab
+
+
 def _row(*widgets) -> QWidget:
     lay = QHBoxLayout()
     for w in widgets:
@@ -409,3 +455,173 @@ def _wrap(layout) -> QWidget:
     layout.setContentsMargins(0, 0, 0, 0)
     w.setLayout(layout)
     return w
+
+
+class SignDialog(QDialog):
+    """Firma digital con certificado .p12/.pfx."""
+
+    def __init__(self, page_label: str, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Firmar digitalmente")
+        self.setMinimumWidth(560)
+        self.cert = QLineEdit()
+        self.cert.setPlaceholderText("Archivo de certificado .p12 / .pfx")
+        pick = QPushButton("…")
+        pick.clicked.connect(self._pick)
+        create = QPushButton("Crear mi certificado…")
+        create.clicked.connect(self._create)
+        self.pw = QLineEdit(echoMode=QLineEdit.Password)
+        self.reason = QLineEdit()
+        self.reason.setPlaceholderText("Ej.: Apruebo el contenido del acta")
+        self.location = QLineEdit()
+        self.visible = QCheckBox(f"Mostrar un sello visible en {page_label} (abajo a la derecha)")
+        self.visible.setChecked(True)
+        self.lock = QCheckBox("Bloquear el documento: no se permiten cambios después de firmar")
+        self.lock.setChecked(True)
+        form = QFormLayout(self)
+        form.addRow(QLabel(
+            "La firma digital sella el documento con su certificado: si alguien cambia algo después,\n"
+            "la verificación (aquí, en Adobe Reader o en otros lectores) lo detecta.\n"
+            "Hágalo como último paso, después de censurar o insertar la imagen de su firma."))
+        form.addRow("Certificado:", _row(self.cert, pick, create))
+        form.addRow("Contraseña del certificado:", self.pw)
+        form.addRow("Motivo:", self.reason)
+        form.addRow("Lugar:", self.location)
+        form.addRow(self.visible)
+        form.addRow(self.lock)
+        form.addRow(_buttons(self, "Firmar"))
+
+    def _pick(self):
+        p, _ = QFileDialog.getOpenFileName(self, "Certificado", "", "Certificados (*.p12 *.pfx)")
+        if p:
+            self.cert.setText(p)
+
+    def _create(self):
+        dlg = CertificateDialog(self)
+        if dlg.exec() and dlg.path:
+            self.cert.setText(str(dlg.path))
+            self.pw.setText(dlg.password)
+
+    def accept(self):
+        if not self.cert.text() or not Path(self.cert.text()).exists():
+            return QMessageBox.warning(self, "Firmar", "Elija un certificado o cree uno.")
+        super().accept()
+
+
+class CertificateDialog(QDialog):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.path: Path | None = None
+        self.password = ""
+        self.setWindowTitle("Crear certificado personal")
+        self.name = QLineEdit()
+        self.org = QLineEdit()
+        self.email = QLineEdit()
+        self.pw = QLineEdit(echoMode=QLineEdit.Password)
+        self.pw2 = QLineEdit(echoMode=QLineEdit.Password)
+        form = QFormLayout(self)
+        form.addRow(QLabel("Crea un certificado propio (autofirmado) para firmar documentos internos.\n"
+                           "Para firmas con validez legal use el certificado de una entidad certificadora.\n"
+                           "Guarde el archivo .p12 en un lugar seguro: es su llave para firmar."))
+        form.addRow("Nombre completo:", self.name)
+        form.addRow("Organización:", self.org)
+        form.addRow("Correo:", self.email)
+        form.addRow("Contraseña:", self.pw)
+        form.addRow("Repetir:", self.pw2)
+        form.addRow(_buttons(self, "Crear"))
+
+    def accept(self):
+        if self.pw.text() != self.pw2.text():
+            return QMessageBox.warning(self, "Certificado", "Las contraseñas no coinciden.")
+        out, _ = QFileDialog.getSaveFileName(self, "Guardar certificado",
+                                             f"{self.name.text().strip() or 'certificado'}.p12",
+                                             "Certificado (*.p12)")
+        if not out:
+            return
+        try:
+            self.path = core.create_certificate(out, self.name.text(), self.pw.text(),
+                                                email=self.email.text() or None,
+                                                organization=self.org.text() or None)
+        except core.PdfTallerError as exc:
+            return QMessageBox.warning(self, "Certificado", str(exc))
+        self.password = self.pw.text()
+        super().accept()
+
+
+class CompressDialog(QDialog):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Comprimir PDF")
+        self.levels = {}
+        lay = QVBoxLayout(self)
+        lay.addWidget(QLabel("Nivel de compresión:"))
+        grp = QButtonGroup(self)
+        for key, text in [("baja", "Baja — sin pérdida de calidad (limpia el archivo y las fuentes)"),
+                          ("media", "Media — recomendada: imágenes a 150 ppp, buena para imprimir"),
+                          ("alta", "Alta — el más pequeño: imágenes a 96 ppp, para correo o web")]:
+            r = QRadioButton(text)
+            grp.addButton(r)
+            self.levels[key] = r
+            lay.addWidget(r)
+        self.levels["media"].setChecked(True)
+        self.gray = QCheckBox("Convertir las imágenes a escala de grises")
+        lay.addWidget(self.gray)
+        lay.addWidget(_buttons(self, "Comprimir"))
+
+    def level(self) -> str:
+        return next(k for k, r in self.levels.items() if r.isChecked())
+
+
+class OcrDialog(QDialog):
+    def __init__(self, languages: list[str], parent=None):
+        super().__init__(parent)
+        from PySide6.QtWidgets import QComboBox
+        self.setWindowTitle("Reconocer texto (OCR)")
+        self.lang = QComboBox()
+        names = {"spa": "Español", "eng": "Inglés", "por": "Portugués", "fra": "Francés", "deu": "Alemán"}
+        options = []
+        if "spa" in languages and "eng" in languages:
+            options.append(("spa+eng", "Español + Inglés"))
+        options += [(l, names.get(l, l)) for l in languages]
+        for code, label in options:
+            self.lang.addItem(label, code)
+        self.only = QCheckBox("Solo páginas escaneadas (sin texto)")
+        self.only.setChecked(True)
+        self.dpi = QSpinBox()
+        self.dpi.setRange(150, 600)
+        self.dpi.setValue(300)
+        self.dpi.setSuffix(" ppp")
+        form = QFormLayout(self)
+        form.addRow(QLabel("Convierte páginas escaneadas en texto que se puede buscar, copiar y censurar."))
+        form.addRow("Idioma:", self.lang)
+        form.addRow("Resolución:", self.dpi)
+        form.addRow(self.only)
+        form.addRow(_buttons(self, "Reconocer"))
+
+
+class SignaturesDialog(QDialog):
+    def __init__(self, path: Path, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle(f"Firmas digitales de «{path.name}»")
+        self.resize(640, 320)
+        out = QTextBrowser()
+        lay = QVBoxLayout(self)
+        lay.addWidget(out)
+        close = QDialogButtonBox(QDialogButtonBox.Close)
+        close.button(QDialogButtonBox.Close).setText("Cerrar")
+        close.rejected.connect(self.reject)
+        lay.addWidget(close)
+        try:
+            sigs = core.verify_signatures(path)
+        except Exception as exc:
+            out.setPlainText(f"No se pudieron verificar las firmas: {exc}")
+            return
+        if not sigs:
+            out.setHtml("<p>Este documento no tiene firmas digitales.</p>")
+            return
+        h = []
+        for s in sigs:
+            color = "#1a7f37" if s.intact and s.covers_all else ("#b35900" if s.intact else "#b00")
+            h.append(f"<p><b style='color:{color}'>{escape(s.summary)}</b><br>"
+                     f"Firmante: {escape(s.signer)}<br>Fecha: {escape(s.signed_at)}<br>Campo: {escape(s.field)}</p>")
+        out.setHtml("".join(h))

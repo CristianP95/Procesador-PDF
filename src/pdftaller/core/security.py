@@ -16,7 +16,7 @@ from .errors import PasswordError, PdfTallerError
 # ---------------------------------------------------------------- proteger / desbloquear
 
 def is_encrypted(path: PathLike) -> bool:
-    """``True`` si el PDF pide contraseña para abrirse."""
+    """``True`` si el PDF pide contraseña para abrirse (ver también ``permissions``)."""
     with pymupdf.open(Path(path)) as doc:
         return bool(doc.needs_pass)
 
@@ -24,7 +24,7 @@ def is_encrypted(path: PathLike) -> bool:
 def protect(
     input: PathLike,
     output: PathLike,
-    user_password: str,
+    user_password: str | None,
     owner_password: str | None = None,
     *,
     allow_print: bool = True,
@@ -35,11 +35,17 @@ def protect(
 ) -> Path:
     """Cifra el PDF con AES-256.
 
-    ``user_password`` es la contraseña para abrirlo. ``owner_password`` (por defecto igual)
-    da control total; los ``allow_*`` limitan lo que puede hacer quien abre con la de usuario.
+    - ``user_password``: contraseña para ABRIR. Puede ser vacía: se abre sin contraseña pero
+      con las restricciones activas.
+    - ``owner_password``: contraseña de PERMISOS (propietario). Quien abre con ella no tiene
+      restricciones, por eso debe ser distinta de la de apertura. Si se omite, se usa la de
+      apertura y los ``allow_*`` no tendrán efecto para quien la conozca.
+    - ``allow_*``: lo que puede hacer quien abre con la contraseña de apertura (o sin contraseña).
     """
-    if not user_password:
-        raise PdfTallerError("La contraseña de apertura no puede estar vacía")
+    user_password = user_password or ""
+    owner_password = owner_password or user_password
+    if not owner_password:
+        raise PdfTallerError("Indique al menos una contraseña (de apertura o de permisos)")
     perm = 0
     if allow_print:
         perm |= pymupdf.PDF_PERM_PRINT | pymupdf.PDF_PERM_PRINT_HQ
@@ -55,15 +61,27 @@ def protect(
             output,
             encryption=pymupdf.PDF_ENCRYPT_AES_256,
             user_pw=user_password,
-            owner_pw=owner_password or user_password,
+            owner_pw=owner_password,
             permissions=perm,
         )
+
+
+def permissions(path: PathLike, password: str | None = None) -> dict[str, bool]:
+    """Permisos efectivos al abrir el PDF con ``password`` (o sin contraseña)."""
+    with open_pdf(path, password, for_edit=False) as doc:
+        p = doc.permissions
+        return {
+            "imprimir": bool(p & pymupdf.PDF_PERM_PRINT),
+            "copiar": bool(p & pymupdf.PDF_PERM_COPY),
+            "modificar": bool(p & pymupdf.PDF_PERM_MODIFY),
+            "comentar": bool(p & pymupdf.PDF_PERM_ANNOTATE),
+        }
 
 
 def unlock(input: PathLike, output: PathLike, password: str) -> Path:
     """Quita la protección de un PDF. Requiere la contraseña de propietario
     (si el PDF se protegió con una sola contraseña, esa misma sirve)."""
-    with open_pdf(input, password) as doc:
+    with open_pdf(input, password, for_edit=False) as doc:
         if doc.metadata.get("encryption"):
             if not password or not (doc.authenticate(password) & 4):  # 4 = propietario
                 raise PasswordError("Se necesita la contraseña de propietario para quitar la protección")
@@ -135,7 +153,7 @@ def compare(
     password_b: str | None = None,
 ) -> CompareResult:
     """Compara dos PDF página por página (texto y, opcionalmente, imagen)."""
-    with open_pdf(a, password_a) as da, open_pdf(b, password_b) as db:
+    with open_pdf(a, password_a, for_edit=False) as da, open_pdf(b, password_b, for_edit=False) as db:
         diffs: list[PageDiff] = []
         for i in range(max(da.page_count, db.page_count)):
             pa = da[i] if i < da.page_count else None
@@ -163,7 +181,7 @@ Rect = tuple[float, float, float, float]
 def find_text(input: PathLike, terms: Iterable[str], *, regex: bool = False,
               ignore_case: bool = True, password: str | None = None) -> dict[int, list[Rect]]:
     """Devuelve las zonas (por página, base 0) donde aparecen los términos."""
-    with open_pdf(input, password) as doc:
+    with open_pdf(input, password, for_edit=False) as doc:
         return {i: [tuple(r) for r in rects] for i, rects in _find(doc, terms, regex, ignore_case).items()}
 
 

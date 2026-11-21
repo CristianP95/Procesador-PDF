@@ -7,12 +7,14 @@ import pymupdf
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QAction, QKeySequence
 from PySide6.QtWidgets import (
-    QFileDialog, QInputDialog, QLabel, QMainWindow, QMenu, QMessageBox, QStackedWidget, QTabWidget, QToolBar,
+    QApplication, QFileDialog, QInputDialog, QLabel, QMainWindow, QMenu, QMessageBox, QStackedWidget, QTabWidget, QToolBar,
 )
 
 from pdftaller import core
 
-from .dialogs import IMG_FILTER, PDF_FILTER, CertifyDialog, CompareDialog, VerifyDialog, MergeDialog, ProtectDialog, RedactDialog, SplitDialog, ask_password
+from .dialogs import (IMG_FILTER, PDF_FILTER, CertifyDialog, CompareDialog, CompressDialog, OcrDialog,
+                      SignaturesDialog, SignDialog, VerifyDialog)
+from .dialogs import MergeDialog, ProtectDialog, RedactDialog, SplitDialog, ask_password
 from .document_tab import DocumentTab
 
 
@@ -40,8 +42,14 @@ class MainWindow(QMainWindow):
         self.statusBar().showMessage("Listo")
 
     # ------------------------------------------------------------ menús
+    SHORT = {"Insertar firma (imagen)…": "Firma (imagen)", "Reconocer texto (OCR)…": "OCR",
+             "Censurar por texto…": "Censurar texto", "Censurar zona (dibujar recuadro)": "Censurar zona",
+             "Certificar con huella (hash)…": "Certificar", "Firmar digitalmente (certificado)…": "Firma digital",
+             "Desbloquear…": "Desbloquear", "Comprimir…": "Comprimir"}
+
     def _act(self, menu, text, slot, shortcut=None, needs_doc=True, toolbar=None):
         a = QAction(text, self)
+        a.setIconText(self.SHORT.get(text, text.rstrip("…")))
         a.triggered.connect(slot)
         if shortcut:
             a.setShortcut(QKeySequence(shortcut))
@@ -85,19 +93,32 @@ class MainWindow(QMainWindow):
         tb.addSeparator()
 
         m = bar.addMenu("&Editar")
+        self._act(m, "Deshacer", self.undo, QKeySequence.Undo)
+        a = self._act(m, "Rehacer", self.redo, "Ctrl+Y")
+        a.setShortcuts([QKeySequence("Ctrl+Y"), QKeySequence("Ctrl+Shift+Z")])
+        m.addSeparator()
         self._act(m, "Insertar firma (imagen)…", self.start_signature, toolbar=tb)
         self._act(m, "Cambiar imagen de firma…", lambda: self.current().request_signature_image())
         tb.addSeparator()
 
+        m = bar.addMenu("O&ptimizar")
+        self._act(m, "Comprimir…", self.compress, toolbar=tb)
+        self._act(m, "Reparar…", self.repair)
+        self._act(m, "Reconocer texto (OCR)…", self.ocr, toolbar=tb)
+        tb.addSeparator()
+
         m = bar.addMenu("&Seguridad")
         self._act(m, "Proteger…", self.protect, toolbar=tb)
-        self._act(m, "Desbloquear…", self.unlock, toolbar=tb)
+        self._act(m, "Desbloquear…", self.unlock)
         self._act(m, "Comparar…", self.compare, toolbar=tb)
         self._act(m, "Censurar por texto…", self.redact, toolbar=tb)
         self._act(m, "Censurar zona (dibujar recuadro)", self.start_area_redaction, toolbar=tb)
         m.addSeparator()
         self._act(m, "Certificar con huella (hash)…", self.certify, toolbar=tb)
-        self._act(m, "Verificar integridad…", self.verify, needs_doc=False, toolbar=tb)
+        self._act(m, "Verificar integridad…", self.verify, needs_doc=False)
+        m.addSeparator()
+        self._act(m, "Firmar digitalmente (certificado)…", self.digital_sign, toolbar=tb)
+        self._act(m, "Verificar firmas digitales…", self.verify_signatures)
 
     def _update_actions(self, *_):
         has = self.current() is not None
@@ -204,6 +225,16 @@ class MainWindow(QMainWindow):
         tab = self.current()
         if tab is None:
             return False
+        if tab.read_only:
+            QMessageBox.warning(self, "Guardar", "El documento tiene restricciones de modificación.\n"
+                                "Use Seguridad → Desbloquear con la contraseña de permisos.")
+            return False
+        if tab.signed and tab.modified:
+            r = QMessageBox.warning(self, "Guardar", "El documento está firmado digitalmente: al guardar cambios "
+                                    "la firma dejará de ser válida.\n¿Continuar?",
+                                    QMessageBox.Yes | QMessageBox.Cancel, QMessageBox.Cancel)
+            if r != QMessageBox.Yes:
+                return False
         if tab.has_redactions:
             r = QMessageBox.question(
                 self, "Guardar",
@@ -276,6 +307,8 @@ class MainWindow(QMainWindow):
 
     def delete_pages(self):
         n = self.current().delete_selected()
+        if n == -2:
+            return
         if n < 0:
             QMessageBox.warning(self, "Eliminar", "No se pueden eliminar todas las páginas.")
         elif n == 0:
@@ -290,7 +323,11 @@ class MainWindow(QMainWindow):
         out = self._ask_output("Guardar PDF protegido", tab.path.with_name(f"{tab.path.stem}_protegido.pdf"))
         opts = dlg.options()
         if out and self._run("Proteger", core.protect, tab.materialize(), out, password=tab.password, **opts):
-            self.open_file(out, opts["user_password"])
+            p = core.permissions(out, opts["user_password"] or None)
+            QMessageBox.information(self, "Proteger", "Documento protegido. Al abrirlo "
+                                    + ("con la contraseña de apertura" if opts["user_password"] else "sin contraseña")
+                                    + " se podrá:\n" + "\n".join(f"  {'✔' if v else '✘'} {k}" for k, v in p.items()))
+            self.open_file(out, opts["user_password"] or None)
 
     def unlock(self):
         tab = self.current()
@@ -324,19 +361,23 @@ class MainWindow(QMainWindow):
 
     def redact(self):
         tab = self.current()
-        src = tab.materialize()
-        dlg = RedactDialog(src, tab.password, self)
+        if not tab.can_edit():
+            return
+        dlg = RedactDialog(tab.path, tab.password, self)
         if not dlg.exec():
             return
-        out = self._ask_output("Guardar PDF censurado", tab.path.with_name(f"{tab.path.stem}_censurado.pdf"))
-        if not out:
-            return
-        res = self._run("Censurar", core.redact, src, out, dlg.term_list(), regex=dlg.regex.isChecked(),
-                        remove_metadata=dlg.meta.isChecked(), password=tab.password)
-        if res:
-            path, count = res
-            self.statusBar().showMessage(f"{count} zona(s) censurada(s)", 6000)
-            self.open_file(path, tab.password)
+        n = tab.add_text_redactions(dlg.hits)
+        tab.scrub_metadata = tab.scrub_metadata or dlg.meta.isChecked()
+        pages = sorted(dlg.hits)
+        if pages:
+            # Ir a la primera página con coincidencias
+            for i in range(tab.pages.count()):
+                if tab.pages.item(i).data(Qt.UserRole) == pages[0]:
+                    tab.pages.setCurrentRow(i)
+                    break
+        self.statusBar().showMessage(
+            f"{n} zona(s) marcadas (■ en las miniaturas). Revise la vista previa; clic derecho sobre una zona "
+            "para quitarla. Guarde para aplicar.", 12000)
 
     # ------------------------------------------------------------ menú contextual
     def _page_menu(self, tab: DocumentTab, pos):
@@ -413,3 +454,100 @@ class MainWindow(QMainWindow):
     def verify(self):
         tab = self.current()
         VerifyDialog(tab.path if tab else None, self).exec()
+
+    # ------------------------------------------------------------ deshacer
+    def undo(self):
+        if not self.current().undo():
+            self.statusBar().showMessage("Nada que deshacer", 2000)
+
+    def redo(self):
+        if not self.current().redo():
+            self.statusBar().showMessage("Nada que rehacer", 2000)
+
+    # ------------------------------------------------------------ optimizar
+    def compress(self):
+        tab = self.current()
+        dlg = CompressDialog(self)
+        if not dlg.exec():
+            return
+        out = self._ask_output("Guardar PDF comprimido", tab.path.with_name(f"{tab.path.stem}_comprimido.pdf"))
+        rep = out and self._run("Comprimir", core.compress, tab.materialize(), out, dlg.level(),
+                                gray=dlg.gray.isChecked(), password=tab.password)
+        if rep:
+            QMessageBox.information(self, "Comprimir", rep.message())
+            self.open_file(rep.path, tab.password)
+
+    def repair(self):
+        tab = self.current()
+        out = self._ask_output("Guardar PDF reparado", tab.path.with_name(f"{tab.path.stem}_reparado.pdf"))
+        rep = out and self._run("Reparar", core.repair, tab.path, out, password=tab.password)
+        if rep:
+            QMessageBox.information(self, "Reparar", rep.message())
+            self.open_file(rep.path, tab.password)
+
+    def ocr(self):
+        from PySide6.QtWidgets import QProgressDialog
+        tab = self.current()
+        langs = core.ocr_languages()
+        if not langs:
+            QMessageBox.warning(
+                self, "OCR", "No se encontraron los datos de reconocimiento de texto (Tesseract).\n\n"
+                "Instale Tesseract para Windows con el idioma español:\n"
+                "https://github.com/UB-Mannheim/tesseract/wiki\n\n"
+                "o copie la carpeta 'tessdata' junto a PDFTaller.exe.")
+            return
+        dlg = OcrDialog(langs, self)
+        if not dlg.exec():
+            return
+        out = self._ask_output("Guardar PDF con texto", tab.path.with_name(f"{tab.path.stem}_ocr.pdf"))
+        if not out:
+            return
+        prog = QProgressDialog("Reconociendo texto…", "Cancelar", 0, tab.pages.count(), self)
+        prog.setWindowTitle("OCR")
+        prog.setWindowModality(Qt.WindowModal)
+        prog.setMinimumDuration(0)
+
+        def progress(i, total):
+            prog.setMaximum(total)
+            prog.setValue(i)
+            prog.setLabelText(f"Reconociendo texto… página {min(i + 1, total)} de {total}")
+            QApplication.processEvents()
+            return not prog.wasCanceled()
+
+        rep = self._run("OCR", core.ocr, tab.materialize(), out, language=dlg.lang.currentData(),
+                        dpi=dlg.dpi.value(), only_without_text=dlg.only.isChecked(),
+                        password=tab.password, progress=progress)
+        prog.close()
+        if rep:
+            QMessageBox.information(self, "OCR", rep.message())
+            self.open_file(rep.path, tab.password)
+
+    # ------------------------------------------------------------ firma digital
+    def digital_sign(self):
+        tab = self.current()
+        if tab.read_only:
+            return tab.can_edit()
+        row = tab.pages.currentRow()
+        dlg = SignDialog(f"la página {row + 1}", self)
+        if not dlg.exec():
+            return
+        out = self._ask_output("Guardar PDF firmado", tab.path.with_name(f"{tab.path.stem}_firmado.pdf"))
+        if not out:
+            return
+        src = tab.materialize()
+        page = rect = None
+        if dlg.visible.isChecked():
+            import pymupdf
+            with pymupdf.open(src) as d:
+                r = d[row].rect
+            page, rect = row, (r.width - 250, r.height - 100, r.width - 30, r.height - 30)
+        res = self._run("Firmar", core.sign, src, out, dlg.cert.text(), dlg.pw.text(),
+                        reason=dlg.reason.text(), location=dlg.location.text(),
+                        page=page, rect=rect, lock=dlg.lock.isChecked())
+        if res:
+            QMessageBox.information(self, "Firmar", "Documento firmado digitalmente.\n"
+                                    "Use Seguridad → Verificar firmas digitales para comprobarlo.")
+            self.open_file(res)
+
+    def verify_signatures(self):
+        SignaturesDialog(self.current().path, self).exec()

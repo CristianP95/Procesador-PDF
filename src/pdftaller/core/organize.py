@@ -12,7 +12,7 @@ from .pages import parse_page_ranges, parse_range_groups
 
 
 def page_count(path: PathLike, password: str | None = None) -> int:
-    with open_pdf(path, password) as doc:
+    with open_pdf(path, password, for_edit=False) as doc:
         return doc.page_count
 
 

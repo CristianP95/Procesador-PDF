@@ -8,10 +8,18 @@ excluir = [
     "tkinter", "pytest", "pymupdf4llm", "pymupdf_layout", "networkx",
 ]
 
+import os
+from PyInstaller.utils.hooks import collect_submodules, collect_data_files
+
+# Datos de OCR (Tesseract): construir_exe.bat los descarga en .\tessdata
+datas = [("tessdata", "tessdata")] if os.path.isdir("tessdata") else []
+datas += collect_data_files("pyhanko")
+
 a = Analysis(
     ["lanzador.py"],
     pathex=["src"],
-    hiddenimports=[],
+    datas=datas,
+    hiddenimports=collect_submodules("pyhanko") + collect_submodules("pyhanko_certvalidator"),
     excludes=excluir,
     noarchive=False,
 )

@@ -1,13 +1,18 @@
 """Widgets de páginas: lista de miniaturas reordenable y vista previa con dibujo de zonas."""
 from __future__ import annotations
 
-from PySide6.QtCore import QPoint, QRect, QRectF, QSize, Qt, Signal
+from PySide6.QtCore import QItemSelectionModel, QPoint, QRect, QRectF, QSize, Qt, Signal
 from PySide6.QtGui import QColor, QPainter, QPen, QPixmap
-from PySide6.QtWidgets import QAbstractItemView, QListView, QListWidget, QWidget
+from PySide6.QtWidgets import QAbstractItemView, QApplication, QListView, QListWidget, QMenu, QWidget
 
 
 class PageList(QListWidget):
-    """Miniaturas en cuadrícula. El arrastre inserta las páginas en el punto exacto donde se sueltan."""
+    """Miniaturas en cuadrícula con arrastre propio.
+
+    El arrastre interno de Qt en modo icono no reordena de forma fiable (sobre todo hacia
+    atrás), así que se implementa a mano: se pulsa sobre una página seleccionada, se arrastra
+    y se suelta; una línea azul indica dónde se insertará.
+    """
 
     order_changed = Signal()
 
@@ -21,35 +26,34 @@ class PageList(QListWidget):
         self.setGridSize(QSize(thumb + 24, thumb + 34))
         self.setSpacing(6)
         self.setUniformItemSizes(True)
-        self.setMovement(QListView.Snap)  # el soltado lo gestiona dropEvent (inserción real en el orden)
-        self.setDragEnabled(True)
-        self.setAcceptDrops(True)
-        self.setDropIndicatorShown(True)
-        self.setDragDropMode(QAbstractItemView.InternalMove)
-        self.setDefaultDropAction(Qt.MoveAction)
+        self.setMovement(QListView.Static)
+        self.setDragDropMode(QAbstractItemView.NoDragDrop)
         self.setSelectionMode(QAbstractItemView.ExtendedSelection)
         self.setContextMenuPolicy(Qt.CustomContextMenu)
         self.setStyleSheet("QListWidget { background: #e4e6ea; }")
+        self._press: QPoint | None = None
+        self._dragging = False
+        self._drop_row: int | None = None
+        self.locked = False
 
     # -- movimiento
     def selected_rows(self) -> list[int]:
         return sorted(self.row(it) for it in self.selectedItems())
 
     def drop_row_at(self, pos: QPoint) -> int:
-        """Fila de inserción para un punto: antes o después del ítem según la mitad donde caiga."""
-        idx = self.indexAt(pos)
-        if not idx.isValid():
-            # Espacio vacío: buscar el ítem más cercano en la misma fila visual
-            best, best_d = self.count(), None
-            for r in range(self.count()):
-                rect = self.visualRect(self.model().index(r, 0))
-                if rect.top() <= pos.y() <= rect.bottom():
-                    d = abs(rect.center().x() - pos.x())
-                    if best_d is None or d < best_d:
-                        best_d, best = d, (r if pos.x() < rect.center().x() else r + 1)
-            return best
-        rect = self.visualRect(idx)
-        return idx.row() + (1 if pos.x() > rect.center().x() else 0)
+        """Fila de inserción para un punto del viewport: antes o después del ítem más cercano."""
+        best, best_d = self.count(), None
+        for r in range(self.count()):
+            rect = self.visualRect(self.model().index(r, 0))
+            if rect.top() <= pos.y() <= rect.bottom() or rect.contains(pos):
+                d = abs(rect.center().x() - pos.x())
+                if best_d is None or d < best_d:
+                    best_d, best = d, (r if pos.x() < rect.center().x() else r + 1)
+        if best_d is None and self.count():
+            # Fuera de cualquier fila visual: antes de la primera fila o después de la última
+            first = self.visualRect(self.model().index(0, 0))
+            best = 0 if pos.y() < first.top() else self.count()
+        return best
 
     def move_rows(self, rows: list[int], target: int, *, final: bool = False):
         """Mueve las filas ``rows`` al punto de inserción ``target`` (0..count, posiciones actuales).
@@ -64,6 +68,9 @@ class PageList(QListWidget):
         else:
             target = max(0, min(target, self.count()))
             target -= sum(1 for r in rows if r < target)
+        if [target + i for i in range(len(rows))] == rows:
+            return  # no cambia nada
+        self.about_to_change()
         items = [self.takeItem(r) for r in reversed(rows)][::-1]
         for i, it in enumerate(items):
             self.insertItem(target + i, it)
@@ -74,22 +81,86 @@ class PageList(QListWidget):
         self.doItemsLayout()
         self.order_changed.emit()
 
-    def dropEvent(self, e):
-        if e.source() is not self:
-            e.ignore()
+    def about_to_change(self):
+        """Gancho para guardar el estado antes de un cambio (deshacer). Lo reemplaza la pestaña."""
+
+    # -- arrastre propio
+    def mousePressEvent(self, e):
+        it = self.itemAt(e.position().toPoint())
+        if e.button() == Qt.LeftButton and it is not None and it.isSelected() and not e.modifiers():
+            # Pulsar sobre una selección existente: posible arrastre (no cambiar la selección aún)
+            self._press = e.position().toPoint()
+            self.setCurrentItem(it, QItemSelectionModel.NoUpdate)
             return
-        self.move_rows(self.selected_rows(), self.drop_row_at(e.position().toPoint()))
-        # IgnoreAction evita que Qt borre las páginas "movidas" al terminar el arrastre.
-        e.setDropAction(Qt.IgnoreAction)
-        e.accept()
+        self._press = e.position().toPoint() if (e.button() == Qt.LeftButton and it is not None) else None
+        super().mousePressEvent(e)
+
+    def mouseMoveEvent(self, e):
+        pos = e.position().toPoint()
+        if self._press is not None and (e.buttons() & Qt.LeftButton):
+            if not self._dragging and not self.locked and \
+                    (pos - self._press).manhattanLength() >= QApplication.startDragDistance():
+                if self.itemAt(self._press) is not None and self.itemAt(self._press).isSelected():
+                    self._dragging = True
+                    self.viewport().setCursor(Qt.ClosedHandCursor)
+            if self._dragging:
+                self._autoscroll(pos)
+                self._drop_row = self.drop_row_at(pos)
+                self.viewport().update()
+                return
+        super().mouseMoveEvent(e)
+
+    def mouseReleaseEvent(self, e):
+        if self._dragging:
+            row = self.drop_row_at(e.position().toPoint())
+            self._end_drag()
+            self.move_rows(self.selected_rows(), row)
+            return
+        if self._press is not None and e.button() == Qt.LeftButton:
+            it = self.itemAt(self._press)
+            if it is not None and it.isSelected() and not e.modifiers():
+                # Clic simple sobre una página ya seleccionada: dejar solo esa
+                self.clearSelection()
+                it.setSelected(True)
+                self.setCurrentItem(it)
+        self._end_drag()
+        super().mouseReleaseEvent(e)
+
+    def _end_drag(self):
+        self._press, self._dragging, self._drop_row = None, False, None
+        self.viewport().unsetCursor()
+        self.viewport().update()
+
+    def _autoscroll(self, pos: QPoint):
+        bar, h = self.verticalScrollBar(), self.viewport().height()
+        if pos.y() < 30:
+            bar.setValue(bar.value() - 20)
+        elif pos.y() > h - 30:
+            bar.setValue(bar.value() + 20)
+
+    def paintEvent(self, e):
+        super().paintEvent(e)
+        if self._dragging and self._drop_row is not None and self.count():
+            r = self._drop_row
+            if r < self.count():
+                rect = self.visualRect(self.model().index(r, 0))
+                x = rect.left() - 3
+            else:
+                rect = self.visualRect(self.model().index(self.count() - 1, 0))
+                x = rect.right() + 3
+            p = QPainter(self.viewport())
+            p.setPen(QPen(QColor(25, 118, 210), 4))
+            p.drawLine(x, rect.top(), x, rect.bottom())
 
 
 class PageView(QWidget):
     """Muestra una página grande. En modo dibujo permite trazar recuadros con el ratón."""
 
     rect_drawn = Signal(QRectF)       # en píxeles de la imagen mostrada
+    mark_menu_requested = Signal(int, QPoint)   # índice de la marca bajo el cursor (-1 si ninguna), posición global
 
-    COLORS = {"redact": QColor(0, 0, 0, 170), "image": QColor(30, 110, 230, 90)}
+    COLORS = {"redact": QColor(0, 0, 0, 170), "redact-texto": QColor(120, 0, 0, 170),
+              "image": QColor(30, 110, 230, 90)}
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -128,6 +199,13 @@ class PageView(QWidget):
             p.setPen(QPen(QColor(220, 40, 40), 2, Qt.DashLine))
             p.setBrush(QColor(220, 40, 40, 40))
             p.drawRect(self._current)
+
+    def contextMenuEvent(self, e):
+        idx = -1
+        for i, (_, r, _) in enumerate(self._marks):
+            if r.contains(e.pos().toPointF()):
+                idx = i
+        self.mark_menu_requested.emit(idx, e.globalPos())
 
     def mousePressEvent(self, e):
         if self.mode and e.button() == Qt.LeftButton:

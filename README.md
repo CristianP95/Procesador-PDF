@@ -3,21 +3,23 @@
 Herramienta de código abierto (AGPL-3.0) en Python para manipular documentos PDF.
 Motor: [PyMuPDF](https://pymupdf.readthedocs.io). Interfaz: PySide6. Plataforma principal: Windows.
 
-## Estado (v0.2, prototipo)
+## Estado (v0.3, prototipo)
 
 | Grupo | Función | Núcleo | GUI |
 |---|---|---|---|
-| Ordenar | Unir | Sí | Sí |
-| Ordenar | Dividir (por rangos `1-13; 14-31` o en partes iguales) | Sí | Sí |
-| Ordenar | Reordenar (arrastrar, clic derecho, Alt+←/→), rotar, eliminar, extraer | Sí | Sí |
-| Seguridad | Proteger (AES-256, permisos) | Sí | Sí |
-| Seguridad | Desbloquear (contraseña de propietario) | Sí | Sí |
-| Seguridad | Comparar (texto y, opcional, imagen) | Sí | Sí |
-| Seguridad | Censurar por texto/regex y por zona dibujada (borra el contenido de verdad) | Sí | Sí |
-| Seguridad | Certificar y verificar integridad (huella SHA-256) | Sí | Sí |
-| Editar | Insertar firma desde imagen | Sí | Sí |
+| Ordenar | Unir, dividir (rangos o partes iguales), extraer | Sí | Sí |
+| Ordenar | Reordenar arrastrando o con clic derecho, rotar, eliminar, **deshacer/rehacer (Ctrl+Z / Ctrl+Y)** | Sí | Sí |
+| Optimizar | **Comprimir** (baja/media/alta, grises) | Sí | Sí |
+| Optimizar | **Reparar** PDFs dañados | Sí | Sí |
+| Optimizar | **OCR** (texto buscable en escaneos; español/inglés incluidos en el .exe) | Sí | Sí |
+| Seguridad | Proteger: contraseña de apertura opcional + contraseña de permisos; restricciones reales | Sí | Sí |
+| Seguridad | Desbloquear (contraseña de propietario); la app respeta las restricciones | Sí | Sí |
+| Seguridad | Comparar (texto e imagen) | Sí | Sí |
+| Seguridad | Censurar por texto/regex y por zona, con vista previa y quitar marcas (clic derecho) | Sí | Sí |
+| Seguridad | Certificar y verificar integridad (SHA-256) | Sí | Sí |
+| Seguridad | **Firma digital con certificado** (.p12/.pfx, PAdES) y verificación | Sí | Sí |
+| Editar | Insertar imagen de firma | Sí | Sí |
 | Convertir | Imágenes a PDF | Sí | Sí |
-| Optimizar | Comprimir, reparar, OCR | — | — |
 | Convertir | PDF ↔ DOC | — | — |
 | Editar | Marca de agua, formularios | — | — |
 
@@ -34,6 +36,10 @@ a cualquier PC con Windows y funciona sin Python.
   A la derecha, vista previa de la página con zoom (Ctrl+rueda).
 - **Censurar zona**: active el botón y dibuje recuadros sobre la vista previa. **Firmar**: elija la imagen y dibuje
   el recuadro donde va. Todo queda pendiente (● en la pestaña) hasta Guardar (Ctrl+S) o Guardar como.
+- **Censurar por texto** marca las coincidencias en la vista previa (rojo oscuro); revíselas y quite las que
+  no correspondan con clic derecho. Nada se borra hasta guardar.
+- **Firma digital**: Seguridad → Firmar digitalmente. Puede crear su propio certificado (.p12) desde el diálogo.
+  Hágalo como último paso: cualquier cambio posterior invalida la firma (Verificar firmas digitales lo detecta).
 - **Certificar** guarda `documento.pdf.sha256.json` con la huella; **Verificar integridad** detecta si el PDF cambió.
 - Las operaciones de Ordenar y Seguridad crean un archivo nuevo y lo abren en otra pestaña.
 - Los documentos protegidos piden la contraseña al abrirse; editarlos conserva la protección.
