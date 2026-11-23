@@ -142,7 +142,7 @@ class SizeAnalysis:
         lines.append("")
         if self.scanned_pages:
             lines.append(f"{self.scanned_pages} página(s) parecen escaneadas (sin texto): use «Reconocer "
-                         "texto (OCR)» para poder buscar, copiar y censurar su contenido.")
+                         "texto» para poder buscar, copiar y censurar su contenido.")
         rec = self.recommendation()
         if rec == "baja" and self.images <= self.total * 0.5:
             lines.append("Recomendación: compresión baja (sin pérdida). Las imágenes no son lo que más ocupa.")
@@ -338,19 +338,19 @@ def ocr(
     td = tessdata or find_tessdata()
     if not td:
         raise PdfTallerError(
-            "No se encontraron los datos de OCR (Tesseract). Instale Tesseract para Windows "
+            "No se encontraron los datos para reconocer texto (Tesseract). Instale Tesseract para Windows "
             "(https://github.com/UB-Mannheim/tesseract/wiki) con el idioma español, "
             "o copie la carpeta 'tessdata' junto al programa.")
     missing = [l for l in language.split("+") if not (Path(td) / f"{l}.traineddata").exists()]
     if missing:
-        raise PdfTallerError(f"Faltan idiomas de OCR en {td}: {', '.join(missing)}")
+        raise PdfTallerError(f"Faltan idiomas para reconocer texto en {td}: {', '.join(missing)}")
     done = skipped = words = 0
     with open_pdf(input, password) as doc:
         total = doc.page_count
         raster: set[int] = set()
         for i, page in enumerate(doc):
             if progress and progress(i, total) is False:
-                raise PdfTallerError("OCR cancelado")
+                raise PdfTallerError("Reconocimiento de texto cancelado")
             if only_without_text and page.get_text("text").strip():
                 skipped += 1
                 continue

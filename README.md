@@ -3,17 +3,16 @@
 Herramienta de código abierto (AGPL-3.0) en Python para manipular documentos PDF.
 Motor: [PyMuPDF](https://pymupdf.readthedocs.io). Interfaz: PySide6. Plataforma principal: Windows.
 
-## Estado (v0.4, prototipo)
+## Estado (v0.5, prototipo)
 
 | Grupo | Función | Núcleo | GUI |
 |---|---|---|---|
 | Ordenar | Unir, dividir (rangos o partes iguales), extraer | Sí | Sí |
 | Ordenar | Reordenar **arrastrando (también hacia atrás)** o con clic derecho, rotar, eliminar | Sí | Sí |
 | Editar | **Deshacer / Rehacer** (Ctrl+Z / Ctrl+Y, botones en la barra), también después de guardar | — | Sí |
-| Optimizar | **Analizar tamaño** (qué ocupa espacio y nivel recomendado) | Sí | Sí |
-| Optimizar | **Comprimir** (baja/media/alta o a medida; grises; quitar metadatos/adjuntos; tamaño estimado por nivel) | Sí | Sí |
+| Optimizar | **Comprimir** con análisis de tamaño (baja/media/alta o a medida; grises; quitar metadatos; tamaño estimado) | Sí | Sí |
 | Optimizar | **Reparar** PDFs dañados | Sí | Sí |
-| Optimizar | **OCR** sin perder calidad (texto invisible sobre la página original; español/inglés en el .exe) | Sí | Sí |
+| Optimizar | **Reconocer texto** de escaneos, sin perder calidad (español/inglés incluidos en el .exe) | Sí | Sí |
 | Seguridad | Proteger: contraseña de apertura opcional + permisos con contraseña de propietario (o generada) | Sí | Sí |
 | Seguridad | Desbloquear (contraseña de propietario); la app respeta las restricciones | Sí | Sí |
 | Seguridad | Comparar (texto e imagen) | Sí | Sí |
@@ -23,7 +22,26 @@ Motor: [PyMuPDF](https://pymupdf.readthedocs.io). Interfaz: PySide6. Plataforma 
 | Editar | Insertar imagen de firma | Sí | Sí |
 | Convertir | Imágenes a PDF | Sí | Sí |
 | Convertir | PDF ↔ DOC | — | — |
-| Editar | Marca de agua, formularios | — | — |
+| Editar | **Marca de agua** (texto o imagen; centro, mosaico, arriba o abajo; giro, color, opacidad; vista previa) | Sí | Sí |
+| Editar | **Diligenciar formularios** (texto, casillas, listas, opciones; aplanar; lote desde CSV) | Sí | Sí |
+
+### Novedades de la v0.5
+
+- **Lenguaje sencillo**: «OCR» pasa a llamarse **Reconocer texto** en menús, diálogos y mensajes
+  (en Python sigue existiendo `core.ocr` y se añade el alias `core.recognize_text`).
+- **Menú simplificado**: seis menús cortos con los grupos del proyecto (Archivo, Ordenar, Optimizar, Convertir,
+  Editar, Seguridad). Lo poco frecuente va en submenús (*Páginas seleccionadas*, *Firma digital*,
+  *Huella de integridad*); se unieron entradas repetidas (un solo «Censurar…», el análisis de tamaño dentro de
+  «Comprimir…»). La barra quedó en 4 botones (Abrir, Guardar, Deshacer, Rehacer) + un botón por grupo que abre
+  su menú. El clic derecho sobre páginas usa submenús *Girar* y *Mover*. La pantalla de inicio ofrece Abrir, Unir,
+  Imágenes a PDF y Verificar.
+- **Marca de agua** (Editar → Marca de agua…): texto (p. ej. CONFIDENCIAL) o imagen (logo), en el centro, repetida
+  en toda la hoja, arriba o abajo; color, tamaño automático, giro, opacidad, detrás del contenido y rango de páginas,
+  con vista previa en vivo. Respeta las páginas giradas.
+- **Diligenciar formularios** (Editar → Diligenciar formulario…): muestra los campos del PDF agrupados por página
+  (texto, casillas, listas desplegables y grupos de opciones), valida opciones y longitud, y guarda en un archivo
+  nuevo; opción «Aplanar» para que los datos queden fijos. Desde Python: `core.fill_from_csv` genera un PDF por fila
+  de un CSV (p. ej. una constancia por estudiante).
 
 ### Novedades de la v0.4
 
@@ -63,9 +81,11 @@ a cualquier PC con Windows y funciona sin Python.
   Nada se borra hasta «Aplicar censura y guardar» (por defecto en un archivo nuevo).
 - **Firma (imagen)**: elija la imagen y dibuje el recuadro donde va. Todo queda pendiente (● en la pestaña)
   hasta Guardar (Ctrl+S) o Guardar como.
-- **Firma digital**: Seguridad → Firmar digitalmente. Puede crear su propio certificado (.p12) desde el diálogo.
+- **Firma digital**: puede crear su propio certificado (.p12) desde el diálogo de firmar.
   Hágalo como último paso: cualquier cambio posterior invalida la firma (Verificar firmas digitales lo detecta).
-- **Certificar** guarda `documento.pdf.sha256.json` con la huella; **Verificar integridad** detecta si el PDF cambió.
+- **Firma digital**: Seguridad → Firma digital → Firmar…
+- **Huella de integridad** (Seguridad): «Crear huella» guarda `documento.pdf.sha256.json`; «Verificar huella» detecta si el PDF cambió.
+- **Marca de agua** y **Diligenciar formulario**: menú Editar; ambos guardan un archivo nuevo y lo abren en otra pestaña.
 - Las operaciones de Ordenar y Seguridad crean un archivo nuevo y lo abren en otra pestaña.
 - Los documentos protegidos piden la contraseña al abrirse; editarlos conserva la protección.
 
@@ -86,6 +106,10 @@ print(core.analyze("libre.pdf").message())
 core.compress("libre.pdf", "liviano.pdf", dpi=110, quality=65)
 print(core.compare("a.pdf", "b.pdf").summary())
 core.redact("libre.pdf", "censurado.pdf", [r"\d{10}"], regex=True)
+core.watermark("libre.pdf", "marcado.pdf", "CONFIDENCIAL", opacity=0.2, position="mosaico")
+print([f.name for f in core.list_fields("formulario.pdf")])
+core.fill_form("formulario.pdf", "lleno.pdf", {"nombre": "Ana Pérez", "acepta": True}, flatten=True)
+core.fill_from_csv("formulario.pdf", "estudiantes.csv", "constancias/", name_column="archivo")
 ```
 
 Ver `ejemplos/automatizar.py`. En texto las páginas son base 1 (`"1-3,5"`, `"8-"`);
@@ -100,6 +124,10 @@ src/pdftaller/
     security.py   proteger, desbloquear, comparar, censurar
     integrity.py  certificar / verificar con SHA-256
     edit.py       insertar firmas (imágenes)
+    watermark.py  marca de agua de texto o imagen
+    forms.py      leer, diligenciar y aplanar formularios; lote desde CSV
+    optimize.py   comprimir, analizar, reparar, reconocer texto
+    signing.py    firma digital, sello de tiempo, certificados de confianza
     convert.py    imágenes a PDF
     pages.py      rangos de páginas "1-3, 5"
   gui/         PySide6: ventana con pestañas, diálogos

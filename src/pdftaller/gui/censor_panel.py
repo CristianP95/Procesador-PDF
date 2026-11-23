@@ -110,7 +110,7 @@ class CensorPanel(QWidget):
             return
         if not n_found:
             self.search_result.setText("No se encontró ninguna coincidencia. Si el documento es escaneado, "
-                                       "use primero Optimizar → Reconocer texto (OCR).")
+                                       "use primero Optimizar → Reconocer texto.")
             return
         extra = "" if n_new == n_found else f" ({n_found - n_new} ya estaban marcadas)"
         self.search_result.setText(f"{n_found} coincidencia(s) en página(s) {pages}. "

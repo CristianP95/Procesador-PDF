@@ -1,4 +1,5 @@
-"""Ventana principal: una pestaña por documento y menús Ordenar / Seguridad."""
+"""Ventana principal: una pestaña por documento; menús agrupados como en el proyecto:
+Ordenar · Optimizar · Convertir · Editar · Seguridad."""
 from __future__ import annotations
 
 from pathlib import Path
@@ -7,7 +8,8 @@ import pymupdf
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QAction, QKeySequence
 from PySide6.QtWidgets import (
-    QApplication, QFileDialog, QInputDialog, QLabel, QMainWindow, QMenu, QMessageBox, QStackedWidget, QTabWidget, QToolBar,
+    QApplication, QFileDialog, QGridLayout, QInputDialog, QLabel, QMainWindow, QMenu, QMessageBox, QPushButton,
+    QStackedWidget, QTabWidget, QToolBar, QToolButton, QVBoxLayout, QWidget,
 )
 
 from pdftaller import core
@@ -16,6 +18,7 @@ from .dialogs import (IMG_FILTER, PDF_FILTER, CertifyDialog, CompareDialog, Comp
                       SignaturesDialog, SignDialog, TrustDialog, VerifyDialog, _info_copy)
 from .dialogs import MergeDialog, ProtectDialog, SplitDialog, ask_password
 from .document_tab import DocumentTab
+from .edit_dialogs import FormDialog, WatermarkDialog
 from .worker import run_busy
 
 
@@ -30,11 +33,8 @@ class MainWindow(QMainWindow):
         self.tabs = QTabWidget(tabsClosable=True, movable=True, documentMode=True)
         self.tabs.tabCloseRequested.connect(self.close_tab)
         self.tabs.currentChanged.connect(self._update_actions)
-        welcome = QLabel("Abra un PDF (Ctrl+O) o arrástrelo aquí para empezar.\n\n"
-                         "Ordenar: unir, dividir, reordenar · Seguridad: proteger, desbloquear, comparar, censurar")
-        welcome.setAlignment(Qt.AlignCenter)
         self.stack = QStackedWidget()
-        self.stack.addWidget(welcome)
+        self.stack.addWidget(self._welcome())
         self.stack.addWidget(self.tabs)
         self.setCentralWidget(self.stack)
 
@@ -43,90 +43,141 @@ class MainWindow(QMainWindow):
         self._update_actions()
         self.statusBar().showMessage("Listo")
 
-    # ------------------------------------------------------------ menús
-    SHORT = {"Insertar firma (imagen)…": "Firma (imagen)", "Reconocer texto (OCR)…": "OCR",
-             "Censurar (texto y zonas)…": "Censurar", "Deshacer": "↶ Deshacer", "Rehacer": "↷ Rehacer",
-             "Certificar con huella (hash)…": "Certificar", "Firmar digitalmente (certificado)…": "Firma digital",
-             "Desbloquear…": "Desbloquear", "Comprimir…": "Comprimir"}
+    # ------------------------------------------------------------ inicio
+    def _welcome(self) -> QWidget:
+        w = QWidget()
+        lay = QVBoxLayout(w)
+        lay.addStretch()
+        title = QLabel("<h2>PDF Taller</h2>Abra un PDF o arrástrelo a esta ventana para empezar.")
+        title.setAlignment(Qt.AlignCenter)
+        lay.addWidget(title)
+        grid = QGridLayout()
+        for i, (text, slot) in enumerate([("📂  Abrir PDF…", self.open_dialog), ("🔗  Unir varios PDF…", self.merge),
+                                          ("🖼  Crear PDF desde imágenes…", self.images_to_pdf),
+                                          ("✔  Verificar un documento…", self.verify)]):
+            b = QPushButton(text)
+            b.setMinimumSize(240, 44)
+            b.clicked.connect(slot)
+            grid.addWidget(b, i // 2, i % 2)
+        box = QWidget()
+        box.setLayout(grid)
+        lay.addWidget(box, 0, Qt.AlignCenter)
+        lay.addStretch()
+        return w
 
-    def _act(self, menu, text, slot, shortcut=None, needs_doc=True, toolbar=None):
+    # ------------------------------------------------------------ menús
+    def _act(self, menu, text, slot, shortcut=None, needs_doc=True, tip: str = ""):
         a = QAction(text, self)
-        a.setIconText(self.SHORT.get(text, text.rstrip("…")))
         a.triggered.connect(slot)
         if shortcut:
             a.setShortcut(QKeySequence(shortcut))
+        if tip:
+            a.setStatusTip(tip)
+            a.setToolTip(tip)
         menu.addAction(a)
-        if toolbar is not None:
-            toolbar.addAction(a)
         if needs_doc:
             self._doc_actions.append(a)
         return a
 
     def _build_menus(self):
+        """Seis menús cortos (los de la barra superior) y una barra con lo esencial.
+
+        Cada grupo de la barra abre el mismo menú que la barra de menús, para no repetir
+        botones: Abrir · Guardar · Deshacer · Rehacer | Ordenar · Optimizar · Convertir · Editar · Seguridad.
+        """
         bar = self.menuBar()
         tb = QToolBar("Principal")
         tb.setMovable(False)
+        tb.setToolButtonStyle(Qt.ToolButtonTextOnly)
         self.addToolBar(tb)
 
         m = bar.addMenu("&Archivo")
-        self._act(m, "Abrir…", self.open_dialog, QKeySequence.Open, needs_doc=False, toolbar=tb)
-        self._act(m, "Guardar", self.save, QKeySequence.Save, toolbar=tb)
+        a_open = self._act(m, "Abrir…", self.open_dialog, QKeySequence.Open, needs_doc=False)
+        a_save = self._act(m, "Guardar", self.save, QKeySequence.Save)
         self._act(m, "Guardar como…", self.save_as, QKeySequence.SaveAs)
-        self._act(m, "Crear PDF desde imágenes…", self.images_to_pdf, needs_doc=False)
+        m.addSeparator()
         self._act(m, "Cerrar pestaña", lambda: self.close_tab(self.tabs.currentIndex()), QKeySequence.Close)
-        m.addSeparator()
         self._act(m, "Salir", self.close, QKeySequence.Quit, needs_doc=False)
-        tb.addSeparator()
 
-        m = bar.addMenu("&Ordenar")
-        self._act(m, "Unir…", self.merge, needs_doc=False, toolbar=tb)
-        self._act(m, "Dividir…", self.split, toolbar=tb)
-        self._act(m, "Extraer páginas seleccionadas…", self.extract)
-        m.addSeparator()
-        self._act(m, "Rotar a la izquierda", lambda: self._rotate(-90), "Ctrl+L")
-        self._act(m, "Rotar a la derecha", lambda: self._rotate(90), "Ctrl+R")
-        self._act(m, "Eliminar páginas seleccionadas", self.delete_pages, QKeySequence.Delete)
-        m.addSeparator()
-        self._act(m, "Mover a la izquierda", lambda: self.current().move_selected("izquierda"), "Alt+Left")
-        self._act(m, "Mover a la derecha", lambda: self.current().move_selected("derecha"), "Alt+Right")
-        self._act(m, "Mover al inicio", lambda: self.current().move_selected("inicio"), "Alt+Home")
-        self._act(m, "Mover al final", lambda: self.current().move_selected("final"), "Alt+End")
-        self._act(m, "Mover a la posición…", self.move_to_position)
-        tb.addSeparator()
-
-        m = bar.addMenu("&Editar")
-        self.a_undo = self._act(m, "Deshacer", self.undo, QKeySequence.Undo, toolbar=tb)
-        self.a_redo = self._act(m, "Rehacer", self.redo, "Ctrl+Y", toolbar=tb)
+        self.a_undo = QAction("Deshacer", self)
+        self.a_undo.triggered.connect(self.undo)
+        self.a_undo.setShortcut(QKeySequence.Undo)
+        self.a_redo = QAction("Rehacer", self)
+        self.a_redo.triggered.connect(self.redo)
         self.a_redo.setShortcuts([QKeySequence("Ctrl+Y"), QKeySequence("Ctrl+Shift+Z")])
         for a in (self.a_undo, self.a_redo):
             a.setShortcutContext(Qt.ApplicationShortcut)
-        tb.addSeparator()
-        m.addSeparator()
-        self._act(m, "Insertar firma (imagen)…", self.start_signature, toolbar=tb)
-        self._act(m, "Cambiar imagen de firma…", lambda: self.current().request_signature_image())
-        tb.addSeparator()
+            self._doc_actions.append(a)
 
-        m = bar.addMenu("O&ptimizar")
-        self._act(m, "Analizar tamaño…", self.analyze)
-        self._act(m, "Comprimir…", self.compress, toolbar=tb)
-        self._act(m, "Reparar…", self.repair)
-        self._act(m, "Reconocer texto (OCR)…", self.ocr, toolbar=tb)
-        tb.addSeparator()
+        # --- Ordenar
+        m_ord = bar.addMenu("&Ordenar")
+        self._act(m_ord, "Unir PDF…", self.merge, needs_doc=False, tip="Une varios PDF en uno")
+        self._act(m_ord, "Dividir…", self.split, tip="Separa el documento en varios archivos")
+        self._act(m_ord, "Extraer páginas…", self.extract, tip="Copia páginas a un PDF nuevo")
+        m_ord.addSeparator()
+        sel = m_ord.addMenu("Páginas seleccionadas")
+        self._act(sel, "Girar a la izquierda", lambda: self._rotate(-90), "Ctrl+L")
+        self._act(sel, "Girar a la derecha", lambda: self._rotate(90), "Ctrl+R")
+        self._act(sel, "Mover a la posición…", self.move_to_position, "Ctrl+M")
+        self._act(sel, "Eliminar", self.delete_pages, QKeySequence.Delete)
+        # Atajos sin entrada en el menú (mover con el teclado)
+        for key, where in (("Alt+Left", "izquierda"), ("Alt+Right", "derecha"),
+                           ("Alt+Home", "inicio"), ("Alt+End", "final")):
+            a = QAction(self)
+            a.setShortcut(QKeySequence(key))
+            a.triggered.connect(lambda _=False, w=where: self.current() and self.current().move_selected(w))
+            self.addAction(a)
 
-        m = bar.addMenu("&Seguridad")
-        self._act(m, "Proteger…", self.protect, toolbar=tb)
-        self._act(m, "Desbloquear…", self.unlock)
-        self._act(m, "Comparar…", self.compare, toolbar=tb)
-        self._act(m, "Censurar (texto y zonas)…", self.redact, "Ctrl+Shift+C", toolbar=tb)
-        self._act(m, "Censurar por texto…", self.redact)
-        self._act(m, "Censurar zona (dibujar recuadro)", self.start_area_redaction)
-        m.addSeparator()
-        self._act(m, "Certificar con huella (hash)…", self.certify, toolbar=tb)
-        self._act(m, "Verificar integridad…", self.verify, needs_doc=False)
-        m.addSeparator()
-        self._act(m, "Firmar digitalmente (certificado)…", self.digital_sign, toolbar=tb)
-        self._act(m, "Verificar firmas digitales…", self.verify_signatures)
-        self._act(m, "Certificados de confianza…", lambda: TrustDialog(self).exec(), needs_doc=False)
+        # --- Optimizar
+        m_opt = bar.addMenu("O&ptimizar")
+        self._act(m_opt, "Comprimir…", self.compress, tip="Reduce el tamaño; muestra qué ocupa espacio")
+        self._act(m_opt, "Reconocer texto…", self.ocr,
+                  tip="Convierte páginas escaneadas en texto que se puede buscar, copiar y censurar")
+        self._act(m_opt, "Reparar…", self.repair, tip="Recupera un PDF dañado")
+
+        # --- Convertir
+        m_conv = bar.addMenu("&Convertir")
+        self._act(m_conv, "Imágenes a PDF…", self.images_to_pdf, needs_doc=False)
+
+        # --- Editar
+        m_ed = bar.addMenu("&Editar")
+        m_ed.addAction(self.a_undo)
+        m_ed.addAction(self.a_redo)
+        m_ed.addSeparator()
+        self._act(m_ed, "Marca de agua…", self.add_watermark, tip="Texto o logo sobre las páginas")
+        self._act(m_ed, "Diligenciar formulario…", self.fill_form, tip="Rellena los campos del PDF")
+        self._act(m_ed, "Insertar firma (imagen)", self.start_signature,
+                  tip="Dibuje dónde va la imagen de su firma manuscrita")
+
+        # --- Seguridad
+        m_sec = bar.addMenu("&Seguridad")
+        self._act(m_sec, "Censurar…", self.redact, "Ctrl+Shift+C", tip="Tapa y borra texto o zonas")
+        self._act(m_sec, "Proteger con contraseña…", self.protect)
+        self._act(m_sec, "Quitar protección…", self.unlock)
+        self._act(m_sec, "Comparar con otro PDF…", self.compare)
+        m_sec.addSeparator()
+        sig = m_sec.addMenu("Firma digital")
+        self._act(sig, "Firmar…", self.digital_sign)
+        self._act(sig, "Verificar firmas…", self.verify_signatures)
+        self._act(sig, "Certificados de confianza…", lambda: TrustDialog(self).exec(), needs_doc=False)
+        hsh = m_sec.addMenu("Huella de integridad")
+        self._act(hsh, "Crear huella (certificar)…", self.certify)
+        self._act(hsh, "Verificar huella…", self.verify, needs_doc=False)
+
+        # --- barra: lo esencial + un botón por grupo (abre el mismo menú)
+        for a, text in ((a_open, "Abrir"), (a_save, "Guardar"), (self.a_undo, "↶ Deshacer"), (self.a_redo, "↷ Rehacer")):
+            a.setIconText(text)
+            tb.addAction(a)
+        tb.addSeparator()
+        for menu, text in ((m_ord, "Ordenar"), (m_opt, "Optimizar"), (m_conv, "Convertir"), (m_ed, "Editar"),
+                           (m_sec, "Seguridad")):
+            b = QToolButton()
+            b.setText(text)
+            b.setToolTip(f"Herramientas de {text}")
+            b.setMenu(menu)
+            b.setPopupMode(QToolButton.InstantPopup)
+            b.setToolButtonStyle(Qt.ToolButtonTextOnly)
+            tb.addWidget(b)
 
     def _update_actions(self, *_):
         has = self.current() is not None
@@ -429,17 +480,18 @@ class MainWindow(QMainWindow):
         n = len(tab.pages.selectedItems())
         m = QMenu(self)
         m.addSection(f"{n} página(s) seleccionada(s)")
-        m.addAction("Rotar a la izquierda", lambda: tab.rotate_selected(-90))
-        m.addAction("Rotar a la derecha", lambda: tab.rotate_selected(90))
-        m.addAction("Girar 180°", lambda: tab.rotate_selected(180))
-        m.addSeparator()
-        m.addAction("Mover a la izquierda", lambda: tab.move_selected("izquierda"))
-        m.addAction("Mover a la derecha", lambda: tab.move_selected("derecha"))
-        m.addAction("Mover al inicio", lambda: tab.move_selected("inicio"))
-        m.addAction("Mover al final", lambda: tab.move_selected("final"))
-        m.addAction("Mover a la posición…", self.move_to_position)
-        m.addSeparator()
+        rot = m.addMenu("Girar")
+        rot.addAction("A la izquierda", lambda: tab.rotate_selected(-90))
+        rot.addAction("A la derecha", lambda: tab.rotate_selected(90))
+        rot.addAction("180°", lambda: tab.rotate_selected(180))
+        mov = m.addMenu("Mover")
+        mov.addAction("Una a la izquierda", lambda: tab.move_selected("izquierda"))
+        mov.addAction("Una a la derecha", lambda: tab.move_selected("derecha"))
+        mov.addAction("Al inicio", lambda: tab.move_selected("inicio"))
+        mov.addAction("Al final", lambda: tab.move_selected("final"))
+        mov.addAction("A la posición…", self.move_to_position)
         m.addAction("Extraer a un PDF nuevo…", self.extract)
+        m.addSeparator()
         m.addAction("Censurar zona en esta página", self.start_area_redaction)
         m.addAction("Insertar firma en esta página", self.start_signature)
         m.addSeparator()
@@ -520,6 +572,44 @@ class MainWindow(QMainWindow):
         if a:
             QMessageBox.information(self, f"Analizar «{tab.path.name}»", a.message())
 
+    def add_watermark(self):
+        tab = self.current()
+        if not tab.can_edit():
+            return
+        src = tab.materialize()
+        dlg = WatermarkDialog(src, tab.password, max(0, tab.pages.currentRow()), tab.pages.count(), self)
+        if not dlg.exec():
+            return
+        out = self._ask_output("Guardar PDF con marca de agua", tab.path.with_name(f"{tab.path.stem}_marca.pdf"))
+        res = out and self._run("Marca de agua", core.watermark, src, out, pages=dlg.pages.text() or None,
+                                password=tab.password, **dlg.options())
+        if res:
+            self.statusBar().showMessage(f"Marca de agua aplicada en {res[1]} página(s)", 6000)
+            self.open_file(res[0], tab.password)
+
+    def fill_form(self):
+        tab = self.current()
+        src = tab.materialize()
+        fields = self._run("Formulario", core.list_fields, src, tab.password)
+        if fields is None:
+            return
+        if not fields:
+            QMessageBox.information(self, "Diligenciar formulario",
+                                    "Este PDF no tiene campos de formulario para llenar.\n\n"
+                                    "Si es un formulario escaneado o sin campos, use Editar → Insertar firma (imagen) "
+                                    "o escriba sobre él con otro programa.")
+            return
+        dlg = FormDialog(fields, self)
+        if not dlg.exec():
+            return
+        out = self._ask_output("Guardar formulario diligenciado",
+                               tab.path.with_name(f"{tab.path.stem}_diligenciado.pdf"))
+        res = out and self._run("Formulario", core.fill_form, src, out, dlg.values(),
+                                flatten=dlg.flatten.isChecked(), password=tab.password)
+        if res:
+            self.statusBar().showMessage(f"Formulario guardado ({res[1]} campo(s) diligenciado(s))", 6000)
+            self.open_file(res[0], tab.password)
+
     def compress(self):
         tab = self.current()
         src = tab.materialize()
@@ -548,7 +638,7 @@ class MainWindow(QMainWindow):
         langs = core.ocr_languages()
         if not langs:
             QMessageBox.warning(
-                self, "OCR", "No se encontraron los datos de reconocimiento de texto (Tesseract).\n\n"
+                self, "Reconocer texto", "No se encontraron los datos de reconocimiento de texto (Tesseract).\n\n"
                 "Instale Tesseract para Windows con el idioma español:\n"
                 "https://github.com/UB-Mannheim/tesseract/wiki\n\n"
                 "o copie la carpeta 'tessdata' junto a PDFTaller.exe.")
@@ -559,12 +649,12 @@ class MainWindow(QMainWindow):
         out = self._ask_output("Guardar PDF con texto", tab.path.with_name(f"{tab.path.stem}_ocr.pdf"))
         if not out:
             return
-        rep = self._run_bg("OCR", "Reconociendo texto…", core.ocr, tab.materialize(), out,
+        rep = self._run_bg("Reconocer texto", "Reconociendo texto…", core.ocr, tab.materialize(), out,
                            language=dlg.lang.currentData(), dpi=dlg.dpi.value(),
                            only_without_text=dlg.only.isChecked(), keep_original=dlg.keep.isChecked(),
                            password=tab.password, progress=True)
         if rep:
-            QMessageBox.information(self, "OCR", rep.message())
+            QMessageBox.information(self, "Reconocer texto", rep.message())
             self.open_file(rep.path, tab.password)
 
     # ------------------------------------------------------------ firma digital

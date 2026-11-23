@@ -118,7 +118,6 @@ class DocumentTab(QWidget):
         bar.addWidget(self.page_label, 1)
         self.btn_redact = self._tool(bar, "■ Zona", "Censurar zona: dibuje recuadros sobre la página", True)
         self.btn_sign = self._tool(bar, "✍ Firma", "Dibuje el recuadro donde irá la imagen de su firma", True)
-        self._tool(bar, "↶ Marca", "Quita la última zona o firma dibujada en esta página").clicked.connect(self.undo_mark)
         bar.addSpacing(12)
         self._tool(bar, "−", "Alejar").clicked.connect(lambda: self.set_zoom(self.zoom / 1.25))
         self._tool(bar, "+", "Acercar").clicked.connect(lambda: self.set_zoom(self.zoom * 1.25))

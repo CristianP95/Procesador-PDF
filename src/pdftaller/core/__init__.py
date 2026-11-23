@@ -8,6 +8,8 @@ from .organize import delete_pages, extract_pages, merge, page_count, reorder, r
 from .pages import parse_page_ranges, parse_range_groups
 from .convert import IMAGE_EXTENSIONS, images_to_pdf
 from .edit import insert_images, insert_signature
+from .watermark import POSITIONS as WATERMARK_POSITIONS, apply_watermark, watermark
+from .forms import FormField, fill_doc, fill_form, fill_from_csv, list_fields
 from .optimize import (COMPRESS_LEVELS, OcrReport, RepairReport, SizeAnalysis, SizeReport, analyze, compress,
                        estimate_compression, find_tessdata, ocr, ocr_languages, repair)
 from .integrity import VerifyResult, certificate_path, certify, file_hash, verify
@@ -17,7 +19,11 @@ from .signing import (DEFAULT_TSA, SignatureStatus, check_password_strength, cre
                       export_public_certificate, sign, signer_certificate, trust_certificate, trust_dir,
                       trusted_certificates, untrust_certificate, verify_signatures)
 
+recognize_text = ocr  # nombre en lenguaje sencillo (la GUI dice «Reconocer texto»)
+
 __all__ = [
+    "watermark", "apply_watermark", "WATERMARK_POSITIONS",
+    "list_fields", "fill_form", "fill_doc", "fill_from_csv", "FormField", "recognize_text",
     "PdfTallerError", "PasswordError", "PageRangeError",
     "merge", "split", "extract_pages", "reorder", "delete_pages", "rotate_pages", "page_count",
     "parse_page_ranges", "parse_range_groups",

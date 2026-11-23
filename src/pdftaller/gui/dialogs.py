@@ -699,7 +699,7 @@ class OcrDialog(QDialog):
     def __init__(self, languages: list[str], parent=None):
         super().__init__(parent)
         from PySide6.QtWidgets import QComboBox
-        self.setWindowTitle("Reconocer texto (OCR)")
+        self.setWindowTitle("Reconocer texto")
         self.lang = QComboBox()
         names = {"spa": "Español", "eng": "Inglés", "por": "Portugués", "fra": "Francés", "deu": "Alemán"}
         options = []

@@ -7,4 +7,4 @@ así la versión 2 (automatización por scripts) reutiliza exactamente el mismo 
     core.merge(["a.pdf", "b.pdf"], "unido.pdf")
 """
 
-__version__ = "0.4.0"
+__version__ = "0.5.0"
