@@ -12,7 +12,7 @@ from PySide6.QtWidgets import (
     QScrollArea, QSlider, QSpinBox, QVBoxLayout, QWidget,
 )
 
-from pdftaller import core
+from procesador_pdf import core
 
 IMG_FILTER = "Imágenes (*.png *.jpg *.jpeg *.bmp)"
 

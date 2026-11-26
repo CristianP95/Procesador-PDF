@@ -10,7 +10,7 @@ from pathlib import Path
 import pymupdf
 
 from ._io import PathLike, open_pdf, save_pdf
-from .errors import PasswordError, PdfTallerError
+from .errors import PasswordError, ProcesadorPdfError
 
 
 # ---------------------------------------------------------------- proteger / desbloquear
@@ -57,14 +57,14 @@ def protect(
     protegido para abrir pero sin restricciones: quien conoce la contraseña puede todo.
 
     Las restricciones las aplican los lectores que respetan la norma PDF (Adobe Reader,
-    PDF Taller…); algunos visores de navegador ignoran parte de ellas.
+    Procesador PDF…); algunos visores de navegador ignoran parte de ellas.
     """
     user_password = user_password or ""
     owner_password = owner_password or ""
     explicit = [v for v in (allow_print, allow_copy, allow_modify, allow_annotate) if v is not None]
     if not owner_password:
         if any(v is False for v in explicit):
-            raise PdfTallerError("Para aplicar restricciones indique una contraseña de permisos distinta "
+            raise ProcesadorPdfError("Para aplicar restricciones indique una contraseña de permisos distinta "
                                  "de la de apertura (puede generarla con generate_password())")
         # Solo contraseña de apertura: sin restricciones (serían inútiles con una sola contraseña)
         allow_print = allow_copy = allow_modify = allow_annotate = True
@@ -73,9 +73,9 @@ def protect(
     allow_copy, allow_modify, allow_annotate = (bool(v) for v in (allow_copy, allow_modify, allow_annotate))
     restricted = not (allow_print and allow_copy and allow_modify and allow_annotate)
     if not owner_password:
-        raise PdfTallerError("Indique al menos una contraseña (de apertura o de permisos)")
+        raise ProcesadorPdfError("Indique al menos una contraseña (de apertura o de permisos)")
     if restricted and owner_password == user_password:
-        raise PdfTallerError("La contraseña de permisos debe ser distinta de la de apertura: "
+        raise ProcesadorPdfError("La contraseña de permisos debe ser distinta de la de apertura: "
                              "quien abre con la de permisos no tiene restricciones")
     perm = 0
     if allow_print:
@@ -99,7 +99,7 @@ def protect(
     wanted = {"imprimir": allow_print, "copiar": allow_copy, "modificar": allow_modify, "comentar": allow_annotate}
     got = permissions(out, user_password or None)
     if got != wanted:
-        raise PdfTallerError(f"Las restricciones no quedaron aplicadas correctamente: {got}")
+        raise ProcesadorPdfError(f"Las restricciones no quedaron aplicadas correctamente: {got}")
     return out
 
 
@@ -238,7 +238,7 @@ def _find(doc: pymupdf.Document, terms: Iterable[str], regex: bool,
             try:
                 re.compile(t)
             except re.error as exc:
-                raise PdfTallerError(f"Expresión regular no válida «{t}»: {exc}") from exc
+                raise ProcesadorPdfError(f"Expresión regular no válida «{t}»: {exc}") from exc
     hits: dict[int, list[tuple[pymupdf.Rect, str]]] = {}
     for page in doc:
         found: list[tuple[pymupdf.Rect, str]] = []

@@ -11,7 +11,7 @@ from pathlib import Path
 import pymupdf
 
 from ._io import PathLike, open_pdf, save_pdf
-from .errors import PdfTallerError
+from .errors import ProcesadorPdfError
 
 # nivel -> (umbral dpi, dpi objetivo, calidad JPEG)
 COMPRESS_LEVELS = {
@@ -54,15 +54,15 @@ def compress(input: PathLike, output: PathLike, level: str = "media", *, gray: b
     Si el resultado no es más pequeño se conserva el original.
     """
     if level not in COMPRESS_LEVELS:
-        raise PdfTallerError(f"Nivel no válido: {level}. Use {', '.join(COMPRESS_LEVELS)}")
+        raise ProcesadorPdfError(f"Nivel no válido: {level}. Use {', '.join(COMPRESS_LEVELS)}")
     threshold, target, q = COMPRESS_LEVELS[level]
     if dpi:
         if not 36 <= dpi <= 600:
-            raise PdfTallerError("La resolución debe estar entre 36 y 600 ppp")
+            raise ProcesadorPdfError("La resolución debe estar entre 36 y 600 ppp")
         threshold, target = int(dpi * 1.3), dpi
     if quality:
         if not 10 <= quality <= 100:
-            raise PdfTallerError("La calidad JPEG debe estar entre 10 y 100")
+            raise ProcesadorPdfError("La calidad JPEG debe estar entre 10 y 100")
         q = quality
         if not threshold:
             threshold, target = 10_000, 0     # solo recomprimir, sin bajar la resolución
@@ -95,7 +95,7 @@ def estimate_compression(input: PathLike, levels=("baja", "media", "alta"), *,
                          password: str | None = None, **options) -> dict[str, int]:
     """Tamaño en bytes que tendría el archivo con cada nivel (no modifica nada)."""
     sizes = {}
-    with tempfile.TemporaryDirectory(prefix="pdftaller_est_") as tmp:
+    with tempfile.TemporaryDirectory(prefix="procesador_pdf_est_") as tmp:
         for lv in levels:
             sizes[lv] = compress(input, Path(tmp) / f"{lv}.pdf", lv, password=password, **options).after
     return sizes
@@ -220,10 +220,10 @@ def repair(input: PathLike, output: PathLike, password: str | None = None) -> Re
     try:
         doc = pymupdf.open(stream=Path(input).read_bytes(), filetype="pdf")
     except Exception as exc:
-        raise PdfTallerError(f"El archivo está demasiado dañado para recuperarlo: {exc}") from exc
+        raise ProcesadorPdfError(f"El archivo está demasiado dañado para recuperarlo: {exc}") from exc
     try:
         if doc.needs_pass and not (password and doc.authenticate(password)):
-            raise PdfTallerError("El archivo está protegido: indique la contraseña")
+            raise ProcesadorPdfError("El archivo está protegido: indique la contraseña")
         warnings = pymupdf.TOOLS.mupdf_warnings()
         damaged = bool(doc.is_repaired) or bool(warnings)
         if warnings:
@@ -238,7 +238,7 @@ def repair(input: PathLike, output: PathLike, password: str | None = None) -> Re
                 damaged = True
                 problems.append(f"Página {page.number + 1} ilegible, se omitió: {exc}")
         if not good:
-            raise PdfTallerError("No se pudo recuperar ninguna página")
+            raise ProcesadorPdfError("No se pudo recuperar ninguna página")
         if len(good) != doc.page_count:
             doc.select(good)
         out = save_pdf(doc, output, garbage=4, clean=True)
@@ -337,20 +337,20 @@ def ocr(
     """
     td = tessdata or find_tessdata()
     if not td:
-        raise PdfTallerError(
+        raise ProcesadorPdfError(
             "No se encontraron los datos para reconocer texto (Tesseract). Instale Tesseract para Windows "
             "(https://github.com/UB-Mannheim/tesseract/wiki) con el idioma español, "
             "o copie la carpeta 'tessdata' junto al programa.")
     missing = [l for l in language.split("+") if not (Path(td) / f"{l}.traineddata").exists()]
     if missing:
-        raise PdfTallerError(f"Faltan idiomas para reconocer texto en {td}: {', '.join(missing)}")
+        raise ProcesadorPdfError(f"Faltan idiomas para reconocer texto en {td}: {', '.join(missing)}")
     done = skipped = words = 0
     with open_pdf(input, password) as doc:
         total = doc.page_count
         raster: set[int] = set()
         for i, page in enumerate(doc):
             if progress and progress(i, total) is False:
-                raise PdfTallerError("Reconocimiento de texto cancelado")
+                raise ProcesadorPdfError("Reconocimiento de texto cancelado")
             if only_without_text and page.get_text("text").strip():
                 skipped += 1
                 continue

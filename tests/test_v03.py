@@ -1,7 +1,7 @@
 import pymupdf
 import pytest
 
-from pdftaller import core
+from procesador_pdf import core
 from conftest import make_pdf, texts_of
 
 
@@ -23,7 +23,7 @@ def test_protect_user_and_owner(tmp_path, pdf3):
     assert core.is_encrypted(out)
     p = core.permissions(out, "abrir")
     assert p["imprimir"] and not p["copiar"] and not p["modificar"]
-    with pytest.raises(core.PdfTallerError):
+    with pytest.raises(core.ProcesadorPdfError):
         core.protect(pdf3, tmp_path / "z.pdf", "", "")
 
 

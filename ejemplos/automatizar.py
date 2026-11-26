@@ -6,7 +6,7 @@ Une todos los PDF de la carpeta, censura números de cédula y protege el result
 import sys
 from pathlib import Path
 
-from pdftaller import core
+from procesador_pdf import core
 
 carpeta = Path(sys.argv[1] if len(sys.argv) > 1 else ".")
 pdfs = sorted(p for p in carpeta.glob("*.pdf") if not p.name.startswith("_"))

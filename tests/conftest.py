@@ -27,4 +27,4 @@ def pdf3(tmp_path):
 @pytest.fixture(autouse=True)
 def _lista_confianza_aislada(tmp_path, monkeypatch):
     """Las pruebas no tocan la lista de certificados de confianza del usuario."""
-    monkeypatch.setenv("PDFTALLER_TRUST_DIR", str(tmp_path / "confianza"))
+    monkeypatch.setenv("PROCESADOR_PDF_TRUST_DIR", str(tmp_path / "confianza"))

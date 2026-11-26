@@ -7,7 +7,7 @@ from pathlib import Path
 import pymupdf
 
 from ._io import PathLike, open_pdf, save_pdf
-from .errors import PdfTallerError
+from .errors import ProcesadorPdfError
 from .pages import parse_page_ranges
 
 POSITIONS = ("centro", "mosaico", "arriba", "abajo")
@@ -18,7 +18,7 @@ def _color(color) -> tuple[float, float, float]:
     if isinstance(color, str):
         c = color.lstrip("#")
         if len(c) != 6:
-            raise PdfTallerError(f"Color no válido: {color}")
+            raise ProcesadorPdfError(f"Color no válido: {color}")
         return tuple(int(c[i:i + 2], 16) / 255 for i in (0, 2, 4))
     r, g, b = color
     return (r / 255, g / 255, b / 255) if max(r, g, b) > 1 else (float(r), float(g), float(b))
@@ -77,11 +77,11 @@ def apply_watermark(
 ) -> int:
     """Aplica la marca de agua a un documento abierto (sin guardarlo). Devuelve las páginas marcadas."""
     if not (text and text.strip()) and not image:
-        raise PdfTallerError("Indique el texto o la imagen de la marca de agua")
+        raise ProcesadorPdfError("Indique el texto o la imagen de la marca de agua")
     if position not in POSITIONS:
-        raise PdfTallerError(f"Posición no válida: {position}. Use {', '.join(POSITIONS)}")
+        raise ProcesadorPdfError(f"Posición no válida: {position}. Use {', '.join(POSITIONS)}")
     if not 0.02 <= opacity <= 1:
-        raise PdfTallerError("La opacidad debe estar entre 2 % y 100 %")
+        raise ProcesadorPdfError("La opacidad debe estar entre 2 % y 100 %")
     rgb = _color(color)
     font = pymupdf.Font("helv")
     pix = _faded_image(image, opacity) if image else None

@@ -12,12 +12,13 @@ from PySide6.QtWidgets import (
     QStackedWidget, QTabWidget, QToolBar, QToolButton, QVBoxLayout, QWidget,
 )
 
-from pdftaller import core
+from procesador_pdf import branding, core
 
 from .dialogs import (IMG_FILTER, PDF_FILTER, CertifyDialog, CompareDialog, CompressDialog, OcrDialog,
                       SignaturesDialog, SignDialog, TrustDialog, VerifyDialog, _info_copy)
 from .dialogs import MergeDialog, ProtectDialog, SplitDialog, ask_password
 from .document_tab import DocumentTab
+from .about import AboutDialog, app_icon, logo
 from .edit_dialogs import FormDialog, WatermarkDialog
 from .worker import run_busy
 
@@ -25,8 +26,8 @@ from .worker import run_busy
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
-        from pdftaller import __version__
-        self.setWindowTitle(f"PDF Taller {__version__}")
+        self.setWindowTitle(f"{branding.APP_NAME} {branding.VERSION}")
+        self.setWindowIcon(app_icon())
         self.resize(1100, 750)
         self.setAcceptDrops(True)
 
@@ -48,13 +49,16 @@ class MainWindow(QMainWindow):
         w = QWidget()
         lay = QVBoxLayout(w)
         lay.addStretch()
-        title = QLabel("<h2>PDF Taller</h2>Abra un PDF o arrástrelo a esta ventana para empezar.")
+        mark = logo(110)
+        mark.setAlignment(Qt.AlignCenter)
+        lay.addWidget(mark)
+        title = QLabel(f"<h2>{branding.APP_NAME}</h2>Abra un PDF o arrástrelo a esta ventana para empezar.")
         title.setAlignment(Qt.AlignCenter)
         lay.addWidget(title)
         grid = QGridLayout()
-        for i, (text, slot) in enumerate([("📂  Abrir PDF…", self.open_dialog), ("🔗  Unir varios PDF…", self.merge),
-                                          ("🖼  Crear PDF desde imágenes…", self.images_to_pdf),
-                                          ("✔  Verificar un documento…", self.verify)]):
+        for i, (text, slot) in enumerate([("Abrir PDF…", self.open_dialog), ("Unir varios PDF…", self.merge),
+                                          ("Crear PDF desde imágenes…", self.images_to_pdf),
+                                          ("Verificar un documento…", self.verify)]):
             b = QPushButton(text)
             b.setMinimumSize(240, 44)
             b.clicked.connect(slot)
@@ -164,6 +168,11 @@ class MainWindow(QMainWindow):
         self._act(hsh, "Crear huella (certificar)…", self.certify)
         self._act(hsh, "Verificar huella…", self.verify, needs_doc=False)
 
+        # --- Ayuda
+        m_help = bar.addMenu("A&yuda")
+        self._act(m_help, f"Acerca de {branding.APP_NAME}…", lambda: AboutDialog(self).exec(), needs_doc=False)
+        self._act(m_help, "Historial de versiones…", lambda: AboutDialog(self, tab=1).exec(), needs_doc=False)
+
         # --- barra: lo esencial + un botón por grupo (abre el mismo menú)
         for a, text in ((a_open, "Abrir"), (a_save, "Guardar"), (self.a_undo, "↶ Deshacer"), (self.a_redo, "↷ Rehacer")):
             a.setIconText(text)
@@ -225,7 +234,7 @@ class MainWindow(QMainWindow):
                     return None
             core.page_count(path, password)  # valida archivo y contraseña
             tab = DocumentTab(path, password)
-        except (core.PdfTallerError, RuntimeError, pymupdf.FileDataError, OSError) as exc:
+        except (core.ProcesadorPdfError, RuntimeError, pymupdf.FileDataError, OSError) as exc:
             QMessageBox.critical(self, "Abrir", str(exc))
             return None
         idx = self.tabs.addTab(tab, tab.title())
@@ -283,7 +292,7 @@ class MainWindow(QMainWindow):
         self.statusBar().showMessage(f"{title}…")
         try:
             return fn(*args, **kwargs)
-        except (core.PdfTallerError, RuntimeError, OSError) as exc:
+        except (core.ProcesadorPdfError, RuntimeError, OSError) as exc:
             QMessageBox.critical(self, title, str(exc))
             return None
         finally:
@@ -293,7 +302,7 @@ class MainWindow(QMainWindow):
         """Como ``_run`` pero en segundo plano, con ventana de progreso (no congela la ventana)."""
         try:
             return run_busy(self, title, text, fn, *args, **kwargs)
-        except (core.PdfTallerError, RuntimeError, OSError) as exc:
+        except (core.ProcesadorPdfError, RuntimeError, OSError) as exc:
             QMessageBox.critical(self, title, str(exc))
             return None
 
@@ -411,13 +420,13 @@ class MainWindow(QMainWindow):
         p = core.permissions(out, user or None)
         lines = ["Documento protegido (AES-256).", "",
                  ("Con la contraseña de apertura" if user else "Al abrirlo (sin contraseña)") + " se podrá:"]
-        lines += [f"   {'✔' if v else '✘'} {k}" for k, v in p.items()]
+        lines += [f"   {'✓' if v else '✗'} {k}" for k, v in p.items()]
         owner = opts["owner_password"]
         if owner and owner != user:
             lines += ["", "Con la contraseña de permisos: todo permitido (solo para usted)."]
         if dlg.generated:
             lines += ["", "Contraseña de permisos generada (guárdela; sin ella no podrá desbloquear):", owner]
-        lines += ["", "Nota: Adobe Reader y PDF Taller aplican estas restricciones; los visores de los "
+        lines += ["", "Nota: Adobe Reader y Procesador PDF aplican estas restricciones; los visores de los "
                   "navegadores pueden ignorar algunas."]
         if dlg.generated:
             _info_copy(self, "Proteger", "\n".join(lines), owner)
@@ -443,7 +452,7 @@ class MainWindow(QMainWindow):
                     break
             except core.PasswordError:
                 pass
-            except core.PdfTallerError as exc:
+            except core.ProcesadorPdfError as exc:
                 QMessageBox.critical(self, "Desbloquear", str(exc))
                 return
             pw = ask_password(self, f"{tab.path.name} (contraseña de propietario)")
@@ -641,7 +650,7 @@ class MainWindow(QMainWindow):
                 self, "Reconocer texto", "No se encontraron los datos de reconocimiento de texto (Tesseract).\n\n"
                 "Instale Tesseract para Windows con el idioma español:\n"
                 "https://github.com/UB-Mannheim/tesseract/wiki\n\n"
-                "o copie la carpeta 'tessdata' junto a PDFTaller.exe.")
+                "o copie la carpeta 'tessdata' junto a ProcesadorPDF.exe.")
             return
         dlg = OcrDialog(langs, self)
         if not dlg.exec():

@@ -7,7 +7,7 @@ from pathlib import Path
 import pymupdf
 
 from ._io import PathLike, save_pdf
-from .errors import PdfTallerError
+from .errors import ProcesadorPdfError
 
 IMAGE_EXTENSIONS = (".png", ".jpg", ".jpeg", ".bmp", ".gif", ".tif", ".tiff", ".webp")
 
@@ -19,14 +19,14 @@ def images_to_pdf(images: Sequence[PathLike], output: PathLike, *, page_size: st
     ``page_size=None`` usa el tamaño de cada imagen; ``"A4"`` o ``"letter"`` centra la imagen en esa hoja.
     """
     if not images:
-        raise PdfTallerError("No hay imágenes")
+        raise ProcesadorPdfError("No hay imágenes")
     out = pymupdf.open()
     try:
         for img_path in images:
             try:
                 img = pymupdf.open(str(img_path))
             except Exception as exc:
-                raise PdfTallerError(f"No se pudo abrir la imagen '{img_path}': {exc}") from exc
+                raise ProcesadorPdfError(f"No se pudo abrir la imagen '{img_path}': {exc}") from exc
             with img:
                 w, h = img[0].rect.width, img[0].rect.height
             if page_size:

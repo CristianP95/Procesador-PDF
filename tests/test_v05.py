@@ -4,7 +4,7 @@ import os
 import pymupdf
 import pytest
 
-from pdftaller import core
+from procesador_pdf import core
 from conftest import make_pdf, texts_of
 
 
@@ -43,9 +43,9 @@ def test_watermark_mosaic_behind_and_image(tmp_path, pdf3):
     out, n = core.watermark(pdf3, tmp_path / "im.pdf", image=img, opacity=0.5, scale=0.4)
     with pymupdf.open(out) as d:
         assert n == 3 and all(p.get_images() for p in d)
-    with pytest.raises(core.PdfTallerError):
+    with pytest.raises(core.ProcesadorPdfError):
         core.watermark(pdf3, tmp_path / "x.pdf", "")
-    with pytest.raises(core.PdfTallerError):
+    with pytest.raises(core.ProcesadorPdfError):
         core.watermark(pdf3, tmp_path / "x.pdf", "A", position="lado")
 
 
@@ -89,9 +89,9 @@ def test_list_and_fill_form(tmp_path):
     out2, _ = core.fill_form(out, tmp_path / "o2.pdf", {"jornada": "Diurna", "acepta": False})
     got = {f.name: f.value for f in core.list_fields(out2)}
     assert got["jornada"] == "Diurna" and got["acepta"] is False
-    with pytest.raises(core.PdfTallerError):
+    with pytest.raises(core.ProcesadorPdfError):
         core.fill_form(src, tmp_path / "x.pdf", {"no_existe": 1})
-    with pytest.raises(core.PdfTallerError):
+    with pytest.raises(core.ProcesadorPdfError):
         core.fill_form(src, tmp_path / "x.pdf", {"programa": "Medicina"})
 
 
@@ -105,7 +105,7 @@ def test_flatten_and_csv_batch(tmp_path):
     made = core.fill_from_csv(src, csv, tmp_path / "lote", name_column="archivo")
     assert [p.name for p in made] == ["ana.pdf", "luis.pdf"]
     assert {f.name: f.value for f in core.list_fields(made[1])}["jornada"] == "Nocturna"
-    with pytest.raises(core.PdfTallerError):
+    with pytest.raises(core.ProcesadorPdfError):
         core.fill_form(make_pdf(tmp_path / "sin.pdf", ["nada"]), tmp_path / "x.pdf", {})
 
 
@@ -123,10 +123,10 @@ def qapp():
 
 
 def test_menus_are_short_and_plain(qapp):
-    from pdftaller.gui.main_window import MainWindow
+    from procesador_pdf.gui.main_window import MainWindow
     w = MainWindow()
     menus = {a.text().replace("&", ""): a.menu() for a in w.menuBar().actions()}
-    assert list(menus) == ["Archivo", "Ordenar", "Optimizar", "Convertir", "Editar", "Seguridad"]
+    assert list(menus) == ["Archivo", "Ordenar", "Optimizar", "Convertir", "Editar", "Seguridad", "Ayuda"]
     for name, m in menus.items():
         top = [a for a in m.actions() if not a.isSeparator()]
         assert len(top) <= 8, (name, [a.text() for a in top])
@@ -136,7 +136,7 @@ def test_menus_are_short_and_plain(qapp):
 
 
 def test_watermark_dialog_preview(qapp, tmp_path, pdf3):
-    from pdftaller.gui.edit_dialogs import WatermarkDialog
+    from procesador_pdf.gui.edit_dialogs import WatermarkDialog
     dlg = WatermarkDialog(pdf3, None, 0, 3)
     dlg._render()
     assert dlg.error.text() == "" and dlg.preview.pixmap() is not None and not dlg.preview.pixmap().isNull()

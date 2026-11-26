@@ -14,7 +14,7 @@ from html import escape
 
 from PySide6.QtGui import QGuiApplication
 
-from pdftaller import core
+from procesador_pdf import core
 
 PDF_FILTER = "Documentos PDF (*.pdf)"
 IMG_FILTER = "Imágenes (*.png *.jpg *.jpeg *.bmp *.gif *.tif *.tiff *.webp)"
@@ -129,8 +129,8 @@ class SplitDialog(QDialog):
     def _update(self, *_):
         try:
             groups = self._groups()
-        except core.PdfTallerError as exc:
-            self.preview.setText(f"<span style='color:#b00'>⚠ {escape(str(exc))}</span>")
+        except core.ProcesadorPdfError as exc:
+            self.preview.setText(f"<span style='color:#b00'>Atención: {escape(str(exc))}</span>")
             return
         desc = [f"{g[0] + 1}-{g[-1] + 1}" if len(g) > 1 else f"{g[0] + 1}" for g in groups[:8]]
         more = f" … y {len(groups) - 8} más" if len(groups) > 8 else ""
@@ -139,7 +139,7 @@ class SplitDialog(QDialog):
     def accept(self):
         try:
             self._groups()
-        except core.PdfTallerError as exc:
+        except core.ProcesadorPdfError as exc:
             QMessageBox.warning(self, "Dividir", str(exc))
             return
         super().accept()
@@ -196,7 +196,7 @@ class ProtectDialog(QDialog):
                             "final para que la guarde."))
         form.addRow("Contraseña de permisos:", _row(self.owner, gen, self.show_pw))
         form.addRow("Repetir:", self.owner_confirm)
-        form.addRow(_wlabel("<small>Cifrado AES-256. Adobe Acrobat/Reader y PDF Taller aplican las restricciones. "
+        form.addRow(_wlabel("<small>Cifrado AES-256. Adobe Acrobat/Reader y Procesador PDF aplican las restricciones. "
                             "Los visores de los navegadores (Edge, Chrome, Firefox) pueden ignorar algunas "
                             "(sobre todo copiar e imprimir): para material sensible combine con contraseña "
                             "de apertura y censura.</small>"))
@@ -299,13 +299,13 @@ class CompareDialog(QDialog):
             res = core.compare(self.source, b, visual=self.visual.isChecked(),
                                password_a=self.password, password_b=pw_b)
             self.output.setHtml(_compare_html(res))
-        except core.PdfTallerError as exc:
+        except core.ProcesadorPdfError as exc:
             self.output.setPlainText(f"Error: {exc}")
 
 
 def _compare_html(res: core.CompareResult) -> str:
     if res.identical:
-        return "<h3 style='color:#1a7f37'>✔ Los documentos son iguales.</h3>"
+        return "<h3 style='color:#1a7f37'>✓ Los documentos son iguales.</h3>"
     changed = [p for p in res.pages if p.changed]
     h = [f"<h3 style='color:#b35900'>Se encontraron diferencias en {len(changed)} página(s)</h3>",
          f"<p>Documento A: {res.pages_a} páginas · Documento B: {res.pages_b} páginas</p>"]
@@ -351,7 +351,7 @@ class CertifyDialog(QDialog):
     def accept(self):
         try:
             cert = core.certify(self.path, self.author.text(), self.note.text())
-        except (core.PdfTallerError, OSError) as exc:
+        except (core.ProcesadorPdfError, OSError) as exc:
             QMessageBox.critical(self, "Certificar", str(exc))
             return
         self.result.setText(core.file_hash(self.path))
@@ -392,7 +392,7 @@ class VerifyDialog(QDialog):
     def accept(self):
         try:
             res = core.verify(self.doc.text(), self.cert.text() or None, self.hash.text() or None)
-        except (core.PdfTallerError, OSError) as exc:
+        except (core.ProcesadorPdfError, OSError) as exc:
             self.result.setText(f"<span style='color:#b00'>{escape(str(exc))}</span>")
             return
         color = "#1a7f37" if res.ok else "#b00"
@@ -508,7 +508,7 @@ class SignDialog(QDialog):
             return
         try:
             path, fp = core.export_public_certificate(self.cert.text(), self.pw.text(), out)
-        except core.PdfTallerError as exc:
+        except core.ProcesadorPdfError as exc:
             return QMessageBox.warning(self, "Exportar", str(exc))
         _info_copy(self, "Exportar", f"Certificado público guardado en:\n{path}\n\nHuella SHA-256 (dígala por "
                    f"teléfono o en persona a quien lo reciba, para que la compare):\n{fp}", fp)
@@ -556,8 +556,8 @@ class CertificateDialog(QDialog):
     def _check(self, text: str):
         try:
             core.check_password_strength(text)
-            self.strength.setText("<span style='color:#1a7f37'>✔ Contraseña robusta</span>")
-        except core.PdfTallerError:
+            self.strength.setText("<span style='color:#1a7f37'>✓ Contraseña robusta</span>")
+        except core.ProcesadorPdfError:
             self.strength.setText("<small>Mínimo 8 caracteres combinando 3 de: minúsculas, mayúsculas, "
                                   "números y símbolos.</small>")
 
@@ -566,7 +566,7 @@ class CertificateDialog(QDialog):
             return QMessageBox.warning(self, "Certificado", "Las contraseñas no coinciden.")
         try:
             core.check_password_strength(self.pw.text())
-        except core.PdfTallerError as exc:
+        except core.ProcesadorPdfError as exc:
             return QMessageBox.warning(self, "Certificado", str(exc))
         out, _ = QFileDialog.getSaveFileName(self, "Guardar certificado",
                                              f"{self.name.text().strip() or 'certificado'}.p12",
@@ -580,7 +580,7 @@ class CertificateDialog(QDialog):
             # El certificado propio es de confianza en este equipo; se exporta su parte pública.
             cer, fp = core.export_public_certificate(self.path, self.pw.text(), Path(out).with_suffix(".cer"))
             core.trust_certificate(cer)
-        except core.PdfTallerError as exc:
+        except core.ProcesadorPdfError as exc:
             return QMessageBox.warning(self, "Certificado", str(exc))
         self.password = self.pw.text()
         _info_copy(self, "Certificado", f"Certificado creado:\n{self.path}\n\nParte pública para compartir:\n{cer}\n\n"
@@ -597,7 +597,7 @@ def _info_copy(parent, title: str, text: str, to_copy: str):
         box.exec()
         if box.clickedButton() is copy_btn:
             QGuiApplication.clipboard().setText(to_copy)
-            box.setInformativeText("✔ Copiado al portapapeles.")
+            box.setInformativeText("✓ Copiado al portapapeles.")
             continue
         break
 
@@ -655,7 +655,7 @@ class CompressDialog(QDialog):
             a = core.analyze(source, password)
             self.analysis.setText(escape(a.message()).replace("\n", "<br>"))
             self.levels[a.recommendation()].setChecked(True)
-        except core.PdfTallerError as exc:
+        except core.ProcesadorPdfError as exc:
             self.analysis.setText(escape(str(exc)))
             self.levels["media"].setChecked(True)
 
@@ -666,7 +666,7 @@ class CompressDialog(QDialog):
                              self.source, password=self.password, gray=self.gray.isChecked(),
                              strip=self.strip.isChecked())
             sizes["personalizada"] = run_busy(self, "Comprimir", "Calculando tamaños…", self._custom_size)
-        except core.PdfTallerError as exc:
+        except core.ProcesadorPdfError as exc:
             return QMessageBox.warning(self, "Comprimir", str(exc))
         before = self.source.stat().st_size
         for k, r in self.levels.items():

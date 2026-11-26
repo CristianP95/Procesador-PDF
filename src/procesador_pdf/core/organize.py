@@ -7,7 +7,7 @@ from pathlib import Path
 import pymupdf
 
 from ._io import PathLike, open_pdf, save_pdf
-from .errors import PageRangeError, PdfTallerError
+from .errors import PageRangeError, ProcesadorPdfError
 from .pages import parse_page_ranges, parse_range_groups
 
 
@@ -27,7 +27,7 @@ def merge(
     ``page_ranges[i]`` (opcional) limita las páginas tomadas del archivo ``i``, p. ej. ``"1-3,5"``.
     """
     if not inputs:
-        raise PdfTallerError("No hay archivos para unir")
+        raise ProcesadorPdfError("No hay archivos para unir")
     result = pymupdf.open()
     try:
         for i, src_path in enumerate(inputs):
@@ -69,7 +69,7 @@ def split(
     - ``ranges="1-3; 4-6; 7-"``: un archivo por grupo separado por ``;``.
     """
     if (every is None) == (ranges is None):
-        raise PdfTallerError("Indique 'every' o 'ranges' (solo uno)")
+        raise ProcesadorPdfError("Indique 'every' o 'ranges' (solo uno)")
     out_dir = Path(output_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     stem = prefix or Path(input).stem
@@ -128,7 +128,7 @@ def rotate_pages(
 ) -> Path:
     """Rota las páginas (base 0; ``None`` = todas) en múltiplos de 90 grados."""
     if degrees % 90:
-        raise PdfTallerError("La rotación debe ser múltiplo de 90")
+        raise ProcesadorPdfError("La rotación debe ser múltiplo de 90")
     with open_pdf(input, password) as doc:
         targets = range(doc.page_count) if pages is None else pages
         for i in targets:

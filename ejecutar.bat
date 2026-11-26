@@ -1,8 +1,8 @@
 @echo off
 setlocal
-REM PDF Taller - inicia la aplicacion. La primera vez crea el entorno e instala dependencias.
+REM Procesador PDF - inicia la aplicacion. La primera vez crea el entorno e instala dependencias.
 cd /d "%~dp0"
-title PDF Taller
+title Procesador PDF
 
 REM 1) Buscar Python (lanzador "py" o "python" real, no el atajo de Microsoft Store)
 set "PY="
@@ -48,8 +48,8 @@ if not exist ".venv\.instalado" (
 )
 
 REM 4) Abrir la aplicacion
-echo Abriendo PDF Taller...
-".venv\Scripts\python.exe" -m pdftaller %*
+echo Abriendo Procesador PDF...
+".venv\Scripts\python.exe" -m procesador_pdf %*
 if errorlevel 1 (
     echo.
     echo [ERROR] La aplicacion termino con un error. El detalle esta arriba.

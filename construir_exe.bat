@@ -1,8 +1,8 @@
 @echo off
 setlocal
-REM Genera dist\PDFTaller\PDFTaller.exe (no necesita Python para ejecutarse).
+REM Genera dist\ProcesadorPDF\ProcesadorPDF.exe (no necesita Python para ejecutarse).
 cd /d "%~dp0"
-title Construir PDF Taller
+title Construir Procesador PDF
 
 set "PY="
 where py >nul 2>&1 && set "PY=py -3"
@@ -28,11 +28,11 @@ for %%L in (spa eng) do (
 )
 
 echo Construyendo el ejecutable...
-"%VPY%" -m PyInstaller --noconfirm --clean PDFTaller.spec || goto :fallo
+"%VPY%" -m PyInstaller --noconfirm --clean ProcesadorPDF.spec || goto :fallo
 
 echo.
-echo Listo: %CD%\dist\PDFTaller\PDFTaller.exe
-echo Puede copiar la carpeta dist\PDFTaller a cualquier PC con Windows.
+echo Listo: %CD%\dist\ProcesadorPDF\ProcesadorPDF.exe
+echo Puede copiar la carpeta dist\ProcesadorPDF a cualquier PC con Windows.
 pause
 exit /b 0
 

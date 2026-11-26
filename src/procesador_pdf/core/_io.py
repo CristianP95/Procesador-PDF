@@ -7,7 +7,7 @@ from typing import Union
 
 import pymupdf
 
-from .errors import PasswordError, PdfTallerError
+from .errors import PasswordError, ProcesadorPdfError
 
 PathLike = Union[str, os.PathLike]
 
@@ -22,10 +22,10 @@ def open_pdf(path: PathLike, password: str | None = None, *, for_edit: bool = Tr
         # Se lee en memoria para no bloquear el archivo (en Windows) y poder sobrescribirlo.
         doc = pymupdf.open(stream=Path(path).read_bytes(), filetype="pdf")
     except Exception as exc:  # pymupdf lanza varios tipos
-        raise PdfTallerError(f"No se pudo abrir '{path}': {exc}") from exc
+        raise ProcesadorPdfError(f"No se pudo abrir '{path}': {exc}") from exc
     if not doc.is_pdf:
         doc.close()
-        raise PdfTallerError(f"'{path}' no es un PDF")
+        raise ProcesadorPdfError(f"'{path}' no es un PDF")
     auth = 0
     if doc.needs_pass:
         auth = doc.authenticate(password) if password else 0

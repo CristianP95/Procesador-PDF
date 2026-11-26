@@ -9,7 +9,7 @@ from pathlib import Path
 import pymupdf
 
 from ._io import PathLike, open_pdf, save_pdf
-from .errors import PasswordError, PdfTallerError
+from .errors import PasswordError, ProcesadorPdfError
 
 # Tipos que se pueden diligenciar
 KINDS = {
@@ -115,7 +115,7 @@ def fill_doc(doc: pymupdf.Document, values: Mapping[str, object], *, strict: boo
     known = {f.name: f for f in _fields(doc)}
     unknown = [k for k in values if k not in known]
     if unknown and strict:
-        raise PdfTallerError("Campos que no existen en el formulario: " + ", ".join(unknown))
+        raise ProcesadorPdfError("Campos que no existen en el formulario: " + ", ".join(unknown))
     changed: set[str] = set()
     radios = _radio_groups(doc)
     radio_target: dict[int, bool] = {}         # xref -> marcar
@@ -125,7 +125,7 @@ def fill_doc(doc: pymupdf.Document, values: Mapping[str, object], *, strict: boo
         if f is None or f.readonly or f.kind != "opción":
             continue
         if str(v) and str(v) not in f.options:
-            raise PdfTallerError(f"«{v}» no es una opción de «{name}»: {', '.join(f.options)}")
+            raise ProcesadorPdfError(f"«{v}» no es una opción de «{name}»: {', '.join(f.options)}")
         for x, label, _ in radios[name]:
             radio_target[x] = label == str(v)
         changed.add(name)
@@ -148,12 +148,12 @@ def fill_doc(doc: pymupdf.Document, values: Mapping[str, object], *, strict: boo
                 w.field_value = w.on_state() if _truthy(v) else "Off"
             elif f.kind == "lista":
                 if f.options and str(v) not in f.options and str(v) != "":
-                    raise PdfTallerError(f"«{v}» no es una opción de «{name}»: {', '.join(f.options)}")
+                    raise ProcesadorPdfError(f"«{v}» no es una opción de «{name}»: {', '.join(f.options)}")
                 w.field_value = str(v)
             else:
                 text = "" if v is None else str(v)
                 if f.max_length and len(text) > f.max_length:
-                    raise PdfTallerError(f"«{name}» admite como máximo {f.max_length} caracteres")
+                    raise ProcesadorPdfError(f"«{name}» admite como máximo {f.max_length} caracteres")
                 w.field_value = text
             w.update()
             changed.add(name)
@@ -182,7 +182,7 @@ def fill_form(input: PathLike, output: PathLike, values: Mapping[str, object], *
     doc = _open_for_filling(input, password)
     try:
         if not _fields(doc):
-            raise PdfTallerError("Este PDF no tiene campos de formulario para diligenciar")
+            raise ProcesadorPdfError("Este PDF no tiene campos de formulario para diligenciar")
         n = fill_doc(doc, values, strict=strict)
         if flatten:
             doc.bake(annots=False, widgets=True)
@@ -204,14 +204,14 @@ def fill_from_csv(template: PathLike, csv_path: PathLike, output_dir: PathLike, 
         delimiter = ";" if raw.splitlines()[0].count(";") > raw.splitlines()[0].count(",") else ","
     rows = list(csv.DictReader(raw.splitlines(), delimiter=delimiter))
     if not rows:
-        raise PdfTallerError("El CSV no tiene filas")
+        raise ProcesadorPdfError("El CSV no tiene filas")
     out_dir = Path(output_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     fields = {f.name for f in list_fields(template, password)}
     cols = [c for c in rows[0] if c != name_column]
     missing = [c for c in cols if c not in fields]
     if missing:
-        raise PdfTallerError("Columnas del CSV que no son campos del formulario: " + ", ".join(missing))
+        raise ProcesadorPdfError("Columnas del CSV que no son campos del formulario: " + ", ".join(missing))
     made = []
     for i, row in enumerate(rows, 1):
         base = (row.get(name_column) or "").strip() if name_column else ""

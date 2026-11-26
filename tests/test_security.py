@@ -1,6 +1,6 @@
 import pytest
 
-from pdftaller import core
+from procesador_pdf import core
 from conftest import make_pdf, texts_of
 
 

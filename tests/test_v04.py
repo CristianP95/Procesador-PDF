@@ -4,7 +4,7 @@ import os
 import pymupdf
 import pytest
 
-from pdftaller import core
+from procesador_pdf import core
 from conftest import make_pdf, texts_of
 
 
@@ -28,9 +28,9 @@ def test_open_password_keeps_restrictions(tmp_path, pdf3):
 
 
 def test_protect_rejects_useless_restrictions(tmp_path, pdf3):
-    with pytest.raises(core.PdfTallerError):          # misma contraseña: no habría restricciones
+    with pytest.raises(core.ProcesadorPdfError):          # misma contraseña: no habría restricciones
         core.protect(pdf3, tmp_path / "a.pdf", "igual", "igual", allow_copy=False)
-    with pytest.raises(core.PdfTallerError):          # restricciones sin contraseña de permisos
+    with pytest.raises(core.ProcesadorPdfError):          # restricciones sin contraseña de permisos
         core.protect(pdf3, tmp_path / "b.pdf", "abrir", allow_print=False)
     # Solo contraseña de apertura: válido, sin restricciones
     out = core.protect(pdf3, tmp_path / "c.pdf", "abrir")
@@ -42,13 +42,13 @@ def test_find_text_labeled_and_bad_regex(tmp_path):
     src = make_pdf(tmp_path / "s.pdf", ["Juan Perez 1234567", "nada"])
     hits = core.find_text_labeled(src, [r"\d{7}", "Juan"], regex=True)
     assert sorted(t for _, t in hits[0]) == ["1234567", "Juan"]
-    with pytest.raises(core.PdfTallerError):
+    with pytest.raises(core.ProcesadorPdfError):
         core.find_text(src, ["(sin cerrar"], regex=True)
 
 
 # ---------------------------------------------------------------- firmas
 def test_signature_trust_and_password_strength(tmp_path, pdf3):
-    with pytest.raises(core.PdfTallerError):
+    with pytest.raises(core.ProcesadorPdfError):
         core.create_certificate(tmp_path / "d.p12", "Débil", "clave123")
     p12 = core.create_certificate(tmp_path / "yo.p12", "Ana Prueba", "Clave-2026")
     signed = core.sign(pdf3, tmp_path / "s.pdf", p12, "Clave-2026", page=0, rect=(300, 650, 560, 760))
@@ -76,7 +76,7 @@ def test_signature_with_handwritten_image(tmp_path, pdf3):
     assert st.intact and st.covers_all and not st.certified
 
 
-@pytest.mark.skipif(not os.environ.get("PDFTALLER_TEST_TSA"), reason="defina PDFTALLER_TEST_TSA=1 (usa internet)")
+@pytest.mark.skipif(not os.environ.get("PROCESADOR_PDF_TEST_TSA"), reason="defina PROCESADOR_PDF_TEST_TSA=1 (usa internet)")
 def test_signature_timestamp(tmp_path, pdf3):
     p12 = core.create_certificate(tmp_path / "yo.p12", "Ana", "Clave-2026")
     st = core.verify_signatures(core.sign(pdf3, tmp_path / "t.pdf", p12, "Clave-2026",
@@ -107,7 +107,7 @@ def test_analyze_and_custom_compression(tmp_path):
     assert sizes["alta"] <= sizes["media"] <= sizes["baja"] <= src.stat().st_size
     rep = core.compress(src, tmp_path / "c.pdf", dpi=72, quality=40, strip=True)
     assert rep.after < sizes["media"]
-    with pytest.raises(core.PdfTallerError):
+    with pytest.raises(core.ProcesadorPdfError):
         core.compress(src, tmp_path / "x.pdf", dpi=5)
 
 
@@ -142,7 +142,7 @@ def test_gui_drag_backwards(qapp, tmp_path):
     from PySide6.QtCore import QEvent, QPoint, QPointF, Qt
     from PySide6.QtGui import QMouseEvent
     from PySide6.QtWidgets import QApplication
-    from pdftaller.gui.document_tab import DocumentTab
+    from procesador_pdf.gui.document_tab import DocumentTab
     src = make_pdf(tmp_path / "d.pdf", [f"P{i}" for i in range(8)])
     tab = DocumentTab(src)
     tab.resize(900, 700)
@@ -170,7 +170,7 @@ def test_gui_drag_backwards(qapp, tmp_path):
 
 def test_gui_censor_and_undo_after_save(qapp, tmp_path):
     from PySide6.QtCore import QRectF
-    from pdftaller.gui.document_tab import DocumentTab
+    from procesador_pdf.gui.document_tab import DocumentTab
     src = make_pdf(tmp_path / "d.pdf", ["Juan Perez 123", "Otra Juan Perez"])
     tab = DocumentTab(src)
     tab.show()

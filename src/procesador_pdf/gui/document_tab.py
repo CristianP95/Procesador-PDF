@@ -1,7 +1,7 @@
 """Pestaña de documento: miniaturas reordenables + vista previa grande + panel de censura.
 
 Todos los cambios (orden, rotación, eliminación, zonas de censura y firmas) quedan
-pendientes hasta Guardar; entonces se aplican con las funciones de ``pdftaller.core``.
+pendientes hasta Guardar; entonces se aplican con las funciones de ``procesador_pdf.core``.
 
 Deshacer (Ctrl+Z) recorre los cambios pendientes y, después, también los guardados:
 antes de cada guardado se conserva una copia de la versión anterior durante la sesión.
@@ -16,14 +16,14 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import pymupdf
-from PySide6.QtCore import QRectF, Qt, QTimer, Signal
+from PySide6.QtCore import QEvent, QRectF, Qt, QTimer, Signal
 from PySide6.QtGui import QIcon, QImage, QPalette, QPixmap, QTransform
 from PySide6.QtWidgets import (
     QHBoxLayout, QLabel, QListWidgetItem, QScrollArea, QSizePolicy, QSplitter, QToolButton, QVBoxLayout,
     QWidget,
 )
 
-from pdftaller import core
+from procesador_pdf import core
 
 from .censor_panel import CensorPanel
 from .page_widgets import PageList, PageView
@@ -56,7 +56,7 @@ def _snapshot(path: Path) -> Path:
     """Copia de seguridad de una versión del archivo (para deshacer tras guardar)."""
     global _SNAP_DIR
     if _SNAP_DIR is None:
-        _SNAP_DIR = Path(tempfile.mkdtemp(prefix="pdftaller_versiones_"))
+        _SNAP_DIR = Path(tempfile.mkdtemp(prefix="procesador_pdf_versiones_"))
     dst = _SNAP_DIR / f"{len(list(_SNAP_DIR.iterdir())):05d}_{path.name}"
     shutil.copyfile(path, dst)
     return dst
@@ -111,13 +111,15 @@ class DocumentTab(QWidget):
         self.scroll.setWidget(self.view)
         self.scroll.setAlignment(Qt.AlignCenter)
         self.scroll.setBackgroundRole(QPalette.Dark)
+        self.scroll.viewport().installEventFilter(self)
+        self._edge_wheel = 0
         bar = QHBoxLayout()
         self.page_label = QLabel()
         self.page_label.setMinimumWidth(10)
         self.page_label.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
         bar.addWidget(self.page_label, 1)
         self.btn_redact = self._tool(bar, "■ Zona", "Censurar zona: dibuje recuadros sobre la página", True)
-        self.btn_sign = self._tool(bar, "✍ Firma", "Dibuje el recuadro donde irá la imagen de su firma", True)
+        self.btn_sign = self._tool(bar, "Firma", "Dibuje el recuadro donde irá la imagen de su firma", True)
         bar.addSpacing(12)
         self._tool(bar, "−", "Alejar").clicked.connect(lambda: self.set_zoom(self.zoom / 1.25))
         self._tool(bar, "+", "Acercar").clicked.connect(lambda: self.set_zoom(self.zoom * 1.25))
@@ -182,15 +184,15 @@ class DocumentTab(QWidget):
         parts = [str(self.path), f"{n} páginas"]
         if self.read_only:
             denied = [k for k, v in self.restrictions.items() if not v]
-            parts.append("🔒 CON RESTRICCIONES (no permite: " + ", ".join(denied) + "). "
+            parts.append("CON RESTRICCIONES (no permite: " + ", ".join(denied) + "). "
                          "Use Desbloquear con la contraseña de permisos")
         elif self.restrictions and not all(self.restrictions.values()):
             denied = [k for k, v in self.restrictions.items() if not v]
-            parts.append("🔒 no permite: " + ", ".join(denied))
+            parts.append("no permite: " + ", ".join(denied))
         elif self.password:
             parts.append("protegido")
         if self.signed:
-            parts.append("✍ FIRMADO DIGITALMENTE: cualquier cambio invalidará la firma")
+            parts.append("FIRMADO DIGITALMENTE: cualquier cambio invalidará la firma")
         nr = sum(m.kind == "redact" for m in self.marks)
         ni = sum(m.kind == "image" for m in self.marks)
         if nr:
@@ -363,6 +365,46 @@ class DocumentTab(QWidget):
         rot = (page.rotation + it.data(ROLE_ROT)) % 180
         width = page.cropbox.height if rot else page.cropbox.width
         self.set_zoom((self.scroll.viewport().width() - 20) / width)
+
+    def eventFilter(self, obj, e):
+        """En la vista previa, la rueda del ratón pasa de página al llegar al borde (como un lector de PDF)."""
+        if obj is self.scroll.viewport() and e.type() == QEvent.Wheel:
+            if e.modifiers() & Qt.ControlModifier:
+                self.set_zoom(self.zoom * (1.1 if e.angleDelta().y() > 0 else 1 / 1.1))
+                return True
+            dy = e.angleDelta().y()
+            if dy == 0:
+                return False
+            bar = self.scroll.verticalScrollBar()
+            at_end = bar.value() >= bar.maximum()
+            at_start = bar.value() <= bar.minimum()
+            if (dy < 0 and at_end) or (dy > 0 and at_start):
+                # Un "clic" de rueda extra en el borde cambia de página (evita saltos por inercia)
+                self._edge_wheel += abs(dy)
+                if self._edge_wheel >= 120:
+                    self._edge_wheel = 0
+                    self.step_page(1 if dy < 0 else -1)
+                return True
+            self._edge_wheel = 0
+        elif obj is self.scroll.viewport() and e.type() == QEvent.KeyPress:
+            if e.key() in (Qt.Key_PageDown, Qt.Key_PageUp):
+                self.step_page(1 if e.key() == Qt.Key_PageDown else -1)
+                return True
+        return super().eventFilter(obj, e)
+
+    def step_page(self, delta: int) -> bool:
+        """Muestra la página siguiente (``delta=1``) o la anterior (``-1``) en la vista previa."""
+        row = self.pages.currentRow() + delta
+        if not 0 <= row < self.pages.count():
+            return False
+        self.pages.clearSelection()
+        self.pages.setCurrentRow(row)
+        self.pages.item(row).setSelected(True)
+        self.pages.scrollToItem(self.pages.item(row))
+        bar = self.scroll.verticalScrollBar()
+        # Al bajar se empieza arriba de la página nueva; al subir, por el final de la anterior
+        QTimer.singleShot(0, lambda: bar.setValue(bar.minimum() if delta > 0 else bar.maximum()))
+        return True
 
     def wheelEvent(self, e):
         if e.modifiers() & Qt.ControlModifier:
@@ -691,7 +733,7 @@ class DocumentTab(QWidget):
         """Ruta con el contenido actual: el original o una copia temporal con los cambios."""
         if not self._modified:
             return self._source
-        tmp = Path(tempfile.mkdtemp(prefix="pdftaller_")) / self.path.name
+        tmp = Path(tempfile.mkdtemp(prefix="procesador_pdf_")) / self.path.name
         return self.write_to(tmp)
 
     def save(self, output: str | Path | None = None) -> Path:

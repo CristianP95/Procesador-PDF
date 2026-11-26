@@ -7,7 +7,7 @@ from pathlib import Path
 import pymupdf
 
 from ._io import PathLike, open_pdf, save_pdf
-from .errors import PdfTallerError
+from .errors import ProcesadorPdfError
 
 Rect = tuple[float, float, float, float]
 
@@ -28,7 +28,7 @@ def insert_images(
     with open_pdf(input, password) as doc:
         for pno, rect, image in placements:
             if not 0 <= pno < doc.page_count:
-                raise PdfTallerError(f"La página {pno + 1} no existe")
+                raise ProcesadorPdfError(f"La página {pno + 1} no existe")
             page = doc[pno]
             # Gira la imagen para que se vea derecha aunque la página esté rotada.
             page.insert_image(pymupdf.Rect(rect), filename=str(image),
